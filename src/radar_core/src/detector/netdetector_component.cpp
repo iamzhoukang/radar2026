@@ -199,7 +199,7 @@ private:
     {
         cv::Mat vis_frame;
         float scale = 1980.0f / raw_frame.cols; 
-        cv::resize(raw_frame, vis_frame, cv::Size(), scale, scale, cv::INTER_AREA);
+        cv::resize(raw_frame, vis_frame, cv::Size(), scale, scale, cv::INTER_LINEAR);
 
         for(const auto &obj : objects){
             cv::Rect scaled_rect(obj.rect.x * scale, obj.rect.y * scale, obj.rect.width * scale, obj.rect.height * scale);

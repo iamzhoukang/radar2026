@@ -1,0 +1,12 @@
+# 忽略编译产生的日志
+log/
+
+# 忽略 ROS2 编译产物
+build/
+install/
+
+# 忽略测试视频（防止单个文件过大导致无法 push）
+video/
+model/
+*.mp4
+*.MP4

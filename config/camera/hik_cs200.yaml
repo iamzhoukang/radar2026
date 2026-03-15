@@ -1,0 +1,7 @@
+camera:
+  serial_number: "DA7831910"  # 你的海康CS200-10UC序列号
+  frame_id: "CS200-10UC"
+  autoWhiteBalance: true
+  expoosureTime: 5000  # 曝光时间，单位微秒
+  gainFactor: 0.7
+  dGammaParam: 0.3

@@ -67,7 +67,7 @@ def generate_launch_description():
     )
 
     # ==========================================
-    # 5. 小地图映射组件
+    # 5. 小地图映射组件 (已加入 Open3D 场地网格路径)
     # ==========================================
     map_node = ComposableNode(
         package='radar_core',
@@ -76,7 +76,8 @@ def generate_launch_description():
         parameters=[{
             'camera_yaml': '/home/lzhros/Code/RadarStation/config/solver/cs200_calibration.yaml',
             'map_yaml': '/home/lzhros/Code/RadarStation/config/map/field_image.yaml',
-            'map_image': '/home/lzhros/Code/RadarStation/config/map/field_image.png'
+            'map_image': '/home/lzhros/Code/RadarStation/config/map/field_image.png',
+            'mesh_path': '/home/lzhros/Code/RadarStation/config/map/RMUC2025_National.PLY'
         }],
         extra_arguments=[{'use_intra_process_comms': True}]
     )

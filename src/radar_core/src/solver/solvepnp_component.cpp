@@ -1,293 +1,154 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <cv_bridge/cv_bridge.h>
-#include <opencv2/opencv.hpp>
-#include <yaml-cpp/yaml.h>
-#include <fstream>
-#include <vector>
-#include <string>
-
 #include <std_srvs/srv/trigger.hpp>
 
+#include "solver/pnp_solver.hpp" 
+#include "solver/calibration_ui.hpp"
+
 namespace radar_core {
-
-// 交互上下文 
-struct MouseContext {
-    cv::Mat raw_img;        // 5K 原始高清图
-    cv::Mat img;            // 缩放/裁切后显示的图片
-    std::vector<cv::Point2f> points; // 原始分辨率的点击点
-    float scale = 1.0f;     
-    bool is_zoomed = false; 
-    cv::Rect zoom_roi;      
-    std::string window_name;
-};
-
-// 全局鼠标回调
-void on_mouse(int event, int x, int y, int flags, void* userdata) {
-    MouseContext* ctx = (MouseContext*)userdata;
-    if (ctx->raw_img.empty()) return;
-
-    if (event == cv::EVENT_LBUTTONDOWN) {
-        if (!ctx->is_zoomed) {
-            if (ctx->points.size() >= 6) {
-                RCLCPP_WARN(rclcpp::get_logger("SolvePnP"), "点满了！请按 's' 保存，或 'c' 清空。");
-                return;
-            }
-            float raw_center_x = x / ctx->scale;
-            float raw_center_y = y / ctx->scale;
-
-            int roi_w = 600, roi_h = 600;
-            int roi_x = std::max(0, (int)raw_center_x - roi_w / 2);
-            int roi_y = std::max(0, (int)raw_center_y - roi_h / 2);
-            roi_x = std::min(roi_x, ctx->raw_img.cols - roi_w);
-            roi_y = std::min(roi_y, ctx->raw_img.rows - roi_h);
-
-            ctx->zoom_roi = cv::Rect(roi_x, roi_y, roi_w, roi_h);
-            ctx->is_zoomed = true;
-            ctx->img = ctx->raw_img(ctx->zoom_roi).clone();
-            cv::putText(ctx->img, "[ZOOM_MODE]", cv::Point(10, 30), 
-                        cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
-            cv::imshow(ctx->window_name, ctx->img);
-        } else {
-            float final_x = ctx->zoom_roi.x + x;
-            float final_y = ctx->zoom_roi.y + y;
-            ctx->points.push_back(cv::Point2f(final_x, final_y));
-            RCLCPP_INFO(rclcpp::get_logger("SolvePnP"), " 选中第 %ld 个点: (%.1f, %.1f)", ctx->points.size(), final_x, final_y);
-            ctx->is_zoomed = false;
-        }
-    } else if (event == cv::EVENT_RBUTTONDOWN) {
-        if (ctx->is_zoomed) ctx->is_zoomed = false;
-        else if (!ctx->points.empty()) ctx->points.pop_back();
-    }
-}
 
 class SolvePnPComponent : public rclcpp::Node
 {
 public:
     explicit SolvePnPComponent(const rclcpp::NodeOptions & options) : Node("solvepnp_component", options)
     {
-        // 1. 严格对齐新的路径结构
+        // 1. 获取参数
         this->declare_parameter<std::string>("config_path", "/home/lzhros/Code/RadarStation/config/solver/cs200_calibration.yaml");
         this->declare_parameter<std::string>("keypoint_path", "/home/lzhros/Code/RadarStation/config/solver/keypoint_6.txt");
         config_file_path_ = this->get_parameter("config_path").as_string();
-        keypoint_file_path_ = this->get_parameter("keypoint_path").as_string();
-
-        if (!load_camera_intrinsics() || !load_world_points()) {
-            RCLCPP_ERROR(this->get_logger(), "初始化失败，请检查 yaml 和 txt 路径！");
+        
+        // 2. 唤醒模型层 (Model)
+        if (!solver_.loadConfig(config_file_path_, this->get_parameter("keypoint_path").as_string())) {
+            RCLCPP_ERROR(this->get_logger(), "算法库初始化失败！请检查 yaml 和 txt 路径，以及基准点是否 >= 4。");
             return; 
         }
 
-        mouse_ctx_.window_name = window_name_;
-
-        // 2. 客户端与服务端
+        // 3. 注册 ROS 通信总线
         client_map_reload_ = this->create_client<std_srvs::srv::Trigger>("map/reload_config");
         srv_start_calib_ = this->create_service<std_srvs::srv::Trigger>(
             "solvepnp/start",
             std::bind(&SolvePnPComponent::handle_start, this, std::placeholders::_1, std::placeholders::_2)
         );
 
-        // 3. UI 刷新定时器 (30Hz，脱离图像回调独立运行)
+        // 4. 启动视图层的引擎心跳 (30 FPS)
         ui_timer_ = this->create_wall_timer(
             std::chrono::milliseconds(33),
             std::bind(&SolvePnPComponent::ui_loop, this)
         );
 
-        RCLCPP_INFO(this->get_logger(), "单帧标定组件就绪... 等待 'solvepnp/start' 触发");
+        RCLCPP_INFO(this->get_logger(), "MVC标定控制器就绪... 等待 'solvepnp/start' 触发");
     }
 
 private:
-    std::string config_file_path_, keypoint_file_path_;
+    std::string config_file_path_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_;
     rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr client_map_reload_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_start_calib_;
     rclcpp::TimerBase::SharedPtr ui_timer_;
 
-    cv::Mat K_, D_;
-    std::vector<cv::Point3f> world_points_;
-    MouseContext mouse_ctx_;
-    bool is_calibrating_ = false;
-    const std::string window_name_ = "Calibration Tool";
 
-    // --- 触发标定 ---
+    solver::PnPSolver solver_;          // 模型层：专注算力
+    ui::CalibrationUI ui_;              // 视图层：专注交互
+
+
     void handle_start(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
                       std::shared_ptr<std_srvs::srv::Trigger::Response> response)
     {
-        if (is_calibrating_) {
+        // 状态锁：如果 UI 引擎已经在跑了，拒绝重复唤醒
+        if (ui_.isActive()) {
             response->success = false;
-            response->message = "Already calibrating";
             return;
         }
         
-        is_calibrating_ = true;
-        mouse_ctx_.points.clear();
-        mouse_ctx_.is_zoomed = false; 
-        mouse_ctx_.raw_img.release();
-
-        cv::namedWindow(window_name_);
-        cv::setMouseCallback(window_name_, on_mouse, &mouse_ctx_);
+        RCLCPP_INFO(this->get_logger(), "正在请求 5K 原始雷达视野...");
         
-        // 动态开启订阅，抓取唯一一帧 5K 图像
-        RCLCPP_INFO(this->get_logger(), "正在向 cs200_topic 请求一张 5K 原图...");
+        // 临时搭桥：向底层的海康节点索要一帧图像
         sub_ = this->create_subscription<sensor_msgs::msg::Image>(
             "cs200_topic", 1, 
             std::bind(&SolvePnPComponent::image_callback, this, std::placeholders::_1)
         );
 
         response->success = true;
-        response->message = "Start";
     }
 
-    // --- 抓取单帧图像 ---
     void image_callback(const sensor_msgs::msg::Image::SharedPtr msg)
     {
-        if (!is_calibrating_ || !mouse_ctx_.raw_img.empty()) return;
-
         try { 
-            mouse_ctx_.raw_img = cv_bridge::toCvCopy(msg, "bgr8")->image; 
-        } catch (...) { return; }
-
-        RCLCPP_INFO(this->get_logger(), "成功截取原图！尺寸: %dx%d", mouse_ctx_.raw_img.cols, mouse_ctx_.raw_img.rows);
-        RCLCPP_INFO(this->get_logger(), "1. 左键点击 -> 进入放大镜 | 2. 放大镜中点击 -> 确认 | 3. 右键 -> 撤销");
-
-        // 【断开订阅】释放零拷贝总线
+            // 将 ROS 消息转化为 OpenCV 矩阵
+            cv::Mat raw_img = cv_bridge::toCvCopy(msg, "bgr8")->image; 
+            
+            // 将图像喂给 UI 引擎并启动
+            ui_.start(raw_img); 
+            RCLCPP_INFO(this->get_logger(), "UI 引擎已接管图像！等待用户操作...");
+        } catch (...) {
+            RCLCPP_ERROR(this->get_logger(), "图像转换失败！");
+        }
+        
+        // 【关键】：过河拆桥！拿到一帧图像后立刻摧毁订阅器，释放零拷贝总线
         sub_.reset(); 
     }
 
-    // --- UI 刷新循环 ---
     void ui_loop()
     {
-        if (!is_calibrating_ || mouse_ctx_.raw_img.empty()) return;
+        // 询问 UI 层：用户刚才敲键盘了吗？
+        ui::UIAction action = ui_.spinOnce();
 
-        int key = cv::waitKey(1) & 0xFF;
+        // 根据用户的指令进行战略调度
+        if (action == ui::UIAction::TRIGGER_CLEAR) {
+            ui_.clearPoints();
+            RCLCPP_INFO(this->get_logger(), "坐标系已清空，请重新点选。");
+        } 
+        else if (action == ui::UIAction::TRIGGER_SOLVE) {
+            perform_solve_pnp();
+        }
+    }
 
-        // 放大模式仅响应按键
-        if (mouse_ctx_.is_zoomed) {
-            if (key == 'c' || key == 'C') {
-                 mouse_ctx_.points.clear();
-                 mouse_ctx_.is_zoomed = false;
-            }
+    void perform_solve_pnp()
+    {
+        // 1. 从视图层拿数据
+        const auto& points = ui_.getClickedPoints();
+        if (points.size() != 6) {
+            RCLCPP_WARN(this->get_logger(), "坐标系重建需要严密的 6 点标定！当前点数: %ld", points.size());
             return;
         }
 
-        // 全景浏览模式 (降采样预览)
-        float target_width = 1280.0f;
-        mouse_ctx_.scale = mouse_ctx_.raw_img.cols > target_width ? target_width / (float)mouse_ctx_.raw_img.cols : 1.0f;
-        cv::resize(mouse_ctx_.raw_img, mouse_ctx_.img, cv::Size(), mouse_ctx_.scale, mouse_ctx_.scale);
+        // 2. 扔给模型层算数学题
+        solver::PnPResult result = solver_.solve(points);
 
-        for (size_t i = 0; i < mouse_ctx_.points.size(); ++i) {
-            cv::Point2f display_pt = mouse_ctx_.points[i] * mouse_ctx_.scale;
-            cv::circle(mouse_ctx_.img, display_pt, 4, cv::Scalar(0, 0, 255), -1); 
-            cv::putText(mouse_ctx_.img, std::to_string(i + 1), display_pt + cv::Point2f(5, -5), 
-                        cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
+        // 3. 批判性评估解算质量
+        if (!result.success || result.reprojection_error > 30.0) {
+            RCLCPP_ERROR(this->get_logger(), "空间重构失败或物理形变过大 (误差: %.2f px)！请重试。", result.reprojection_error); 
+            return; 
         }
 
-        cv::imshow(window_name_, mouse_ctx_.img);
+        RCLCPP_INFO(this->get_logger(), "空间重构极度精准！重投影误差: %.2f px", result.reprojection_error);
         
-        if (key == 's' || key == 'S') perform_solve_pnp();
-        if (key == 'c' || key == 'C') mouse_ctx_.points.clear();
-    }
-
-    // --- 核心解算 ---
-    void perform_solve_pnp()
-    {
-        if (mouse_ctx_.points.size() != 6) {
-            RCLCPP_WARN(this->get_logger(), "点数不足6个!当前点数:%ld", mouse_ctx_.points.size()); return;
+        // 4. 数据持久化与反馈
+        if (solver_.saveExtrinsics(config_file_path_, result.rvec, result.tvec)) {
+            
+            // 指挥 UI 引擎在屏幕上打下绿色的成功烙印
+            auto projected_pts = solver_.projectPoints(result.rvec, result.tvec);
+            ui_.showFeedback(projected_pts, result.reprojection_error);
+            
+            // 通知隔壁的地图组件热更新参数
+            trigger_map_reload();
+            
+            // 卸载 UI 引擎，释放 5K 图像的庞大显存
+            ui_.stop(); 
+            RCLCPP_INFO(this->get_logger(), "标定系统已休眠。");
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "灾难级错误：无法将物理参数写入 YAML！");
         }
-        cv::Mat rvec, tvec;
-        if (!cv::solvePnP(world_points_, mouse_ctx_.points, K_, D_, rvec, tvec)) {
-            RCLCPP_ERROR(this->get_logger(), "解算失败！"); return;
-        }
-
-        double avg_error = calculate_reprojection_error(rvec, tvec);
-        RCLCPP_INFO(this->get_logger(), "平均重投影误差: %.2f px", avg_error);
-
-        if (avg_error > 30.0) {
-            RCLCPP_ERROR(this->get_logger(), "误差过大！标定无效。"); return; 
-        }
-
-        show_reprojection_feedback(rvec, tvec);
-        save_to_yaml(rvec, tvec);
-        trigger_map_reload();
-        finish_calibration();
-    }
-
-    double calculate_reprojection_error(const cv::Mat& rvec, const cv::Mat& tvec)
-    {
-        std::vector<cv::Point2f> projected_points;
-        cv::projectPoints(world_points_, rvec, tvec, K_, D_, projected_points);
-        double total_error = 0.0;
-        for (size_t i = 0; i < world_points_.size(); ++i) {
-            total_error += cv::norm(mouse_ctx_.points[i] - projected_points[i]);
-        }
-        return total_error / world_points_.size();
-    }
-
-    void show_reprojection_feedback(const cv::Mat& rvec, const cv::Mat& tvec)
-    {
-        std::vector<cv::Point2f> projected_points;
-        cv::projectPoints(world_points_, rvec, tvec, K_, D_, projected_points);
-        if (mouse_ctx_.is_zoomed) mouse_ctx_.is_zoomed = false;
-        
-        cv::resize(mouse_ctx_.raw_img, mouse_ctx_.img, cv::Size(), mouse_ctx_.scale, mouse_ctx_.scale);
-
-        for (const auto& pt : projected_points) {
-            cv::circle(mouse_ctx_.img, pt * mouse_ctx_.scale, 8, cv::Scalar(0, 255, 0), 2);
-        }
-        cv::putText(mouse_ctx_.img, "Saved! Error: " + std::to_string(calculate_reprojection_error(rvec, tvec)).substr(0, 4), 
-                    cv::Point(20, 40), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
-        cv::imshow(window_name_, mouse_ctx_.img);
-        cv::waitKey(1500); 
-    }
-
-    void finish_calibration() {
-        cv::destroyWindow(window_name_);
-        is_calibrating_ = false;
-        for(int i = 0; i < 5; ++i) {
-            cv::waitKey(10);
-        }
-        mouse_ctx_.raw_img.release(); 
-        RCLCPP_INFO(this->get_logger(), "标定结束，窗口已销毁，等待下一次触发。");
     }
 
     void trigger_map_reload() {
-        if (!client_map_reload_->wait_for_service(std::chrono::milliseconds(200))) {
-            RCLCPP_WARN(this->get_logger(), "Map Node 未响应，仅保存了 yaml 文件。");
-            return;
+        if (client_map_reload_->wait_for_service(std::chrono::milliseconds(200))) {
+            client_map_reload_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+            RCLCPP_INFO(this->get_logger(), "已向 Map 节点发送物理引擎热重载指令。");
+        } else {
+            RCLCPP_WARN(this->get_logger(), "Map 节点失联，新标定将在下次重启时生效。");
         }
-        auto req = std::make_shared<std_srvs::srv::Trigger::Request>();
-        client_map_reload_->async_send_request(req);
-        RCLCPP_INFO(this->get_logger(), "已发送热重载信号至 MapComponent。");
-    }
-
-    void save_to_yaml(const cv::Mat& rvec, const cv::Mat& tvec) {
-        try {
-            YAML::Node config = YAML::LoadFile(config_file_path_);
-            config["camera"]["rvec"] = std::vector<double>{rvec.at<double>(0), rvec.at<double>(1), rvec.at<double>(2)};
-            config["camera"]["tvec"] = std::vector<double>{tvec.at<double>(0), tvec.at<double>(1), tvec.at<double>(2)};
-            std::ofstream fout(config_file_path_);
-            fout << config;
-            RCLCPP_INFO(this->get_logger(), "更新后的 rvec/tvec 已写入 cs200_calibration.yaml");
-        } catch (...) { RCLCPP_ERROR(this->get_logger(), "写入 YAML 失败！"); }
-    }
-
-    bool load_world_points() {
-        std::ifstream file(keypoint_file_path_);
-        if (!file.is_open()) return false;
-        world_points_.clear();
-        float x, y, z;
-        while (file >> x >> y >> z) world_points_.emplace_back(x, y, z);
-        return (world_points_.size() == 6);
-    }
-
-    bool load_camera_intrinsics() {
-        try {
-            YAML::Node config = YAML::LoadFile(config_file_path_);
-            auto k = config["camera"]["K"].as<std::vector<double>>();
-            auto d = config["camera"]["dist"].as<std::vector<double>>();
-            K_ = cv::Mat(3, 3, CV_64F, k.data()).clone();
-            D_ = cv::Mat(1, 5, CV_64F, d.data()).clone();
-            return true;
-        } catch (...) { return false; }
     }
 };
 

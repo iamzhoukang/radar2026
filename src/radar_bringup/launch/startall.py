@@ -7,14 +7,22 @@ from launch_ros.descriptions import ComposableNode
 
 def generate_launch_description():
     # ==========================================
-    # 0. 定义外部参数开关
+    # 0. 定义外部参数开关 (支持终端动态传参)
     # ==========================================
     use_video_arg = DeclareLaunchArgument(
         'use_video',
-        default_value='false',  # true表示使用视频进行离线测试，false表示使用相机进行实时测试
+        default_value='false',  
         description='是否使用视频进行离线测试'
     )
     use_video = LaunchConfiguration('use_video')
+
+    # 【新增】：红蓝方阵营开关
+    is_blue_team_arg = DeclareLaunchArgument(
+        'is_blue_team',
+        default_value='true',  # 默认蓝方
+        description='雷达站所属阵营:true为蓝方,false为红方'
+    )
+    is_blue_team = LaunchConfiguration('is_blue_team')
 
     # ==========================================
     # 1. 视频组件 (零拷贝插件)
@@ -67,7 +75,7 @@ def generate_launch_description():
     )
 
     # ==========================================
-    # 5. 小地图映射组件 (已加入 Open3D 场地网格路径)
+    # 5. 小地图映射组件 (已加入 Open3D 场地网格路径与阵营参数)
     # ==========================================
     map_node = ComposableNode(
         package='radar_core',
@@ -77,7 +85,8 @@ def generate_launch_description():
             'camera_yaml': '/home/lzhros/Code/RadarStation/config/solver/cs200_calibration.yaml',
             'map_yaml': '/home/lzhros/Code/RadarStation/config/map/field_image.yaml',
             'map_image': '/home/lzhros/Code/RadarStation/config/map/field_image.png',
-            'mesh_path': '/home/lzhros/Code/RadarStation/config/map/RMUC2025_National.PLY'
+            'mesh_path': '/home/lzhros/Code/RadarStation/config/map/RMUC2025_National.PLY',
+            'is_blue_team': is_blue_team  
         }],
         extra_arguments=[{'use_intra_process_comms': True}]
     )
@@ -112,6 +121,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         use_video_arg, 
+        is_blue_team_arg, # 【新增】：务必在此处注册新参数
         container, 
         visualizer_standalone_node
     ])

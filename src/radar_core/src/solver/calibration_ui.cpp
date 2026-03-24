@@ -105,7 +105,7 @@ void CalibrationUI::handleMouse(int event, int x, int y, int flags) {
             zoom_roi_ = cv::Rect(roi_x, roi_y, roi_w, roi_h);
             is_zoomed_ = true;
             display_img_ = raw_img_(zoom_roi_).clone();
-            cv::putText(display_img_, "[ZOOM_MODE]", cv::Point(10, 30), 
+            cv::putText(display_img_, "[ZOOM]", cv::Point(10, 30), 
                         cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
             cv::imshow(window_name_, display_img_);
         } else {

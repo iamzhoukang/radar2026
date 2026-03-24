@@ -63,7 +63,11 @@ add_library(solvepnp_component SHARED
   src/solver/calibration_ui.cpp
 )
 
-add_library(map_component SHARED src/map/map_component.cpp)
+add_library(map_component SHARED 
+  src/map/map_component.cpp
+  src/map/transform.cpp
+  src/map/raycaster.cpp
+)
 
 # ==========================================
 # 5. 暴露头文件路径 
@@ -72,9 +76,7 @@ target_include_directories(camera_one_component PRIVATE $<BUILD_INTERFACE:${CMAK
 target_include_directories(video_component PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src> ${OpenCV_INCLUDE_DIRS})
 target_include_directories(netdetector_component PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src> ${OpenCV_INCLUDE_DIRS} ${TRT_INC} ${CUDA_INCLUDE_DIRS})
 target_include_directories(solvepnp_component PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> ${OpenCV_INCLUDE_DIRS})
-
-# 【修正】：为 map_component 添加 Open3D 的头文件路径包含
-target_include_directories(map_component PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src> ${OpenCV_INCLUDE_DIRS} ${Open3D_INCLUDE_DIRS})
+target_include_directories(map_component PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> ${OpenCV_INCLUDE_DIRS} ${Open3D_INCLUDE_DIRS})
 
 # ==========================================
 # 6. 链接 ROS2 目标依赖 (仅放 ament_package)

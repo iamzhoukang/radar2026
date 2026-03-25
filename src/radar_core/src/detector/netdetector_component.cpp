@@ -45,7 +45,7 @@ public:
             std::bind(&NetDetectorComponent::imageCallback, this, std::placeholders::_1)
         );
 
-        RCLCPP_INFO(this->get_logger(), "🚀 极致丝滑版组件已启动 (包含性能监测)");
+        RCLCPP_INFO(this->get_logger(), "极致丝滑版组件已启动 (包含性能监测)");
     }
 
 private:
@@ -99,9 +99,7 @@ private:
             last_time_ = end_time;
         }
 
-        // ==========================================
-        // 【极致丝滑逻辑】：主线程极速缩放 + 内存早释放
-        // ==========================================
+        //主线程极速缩放 + 内存早释放
         float scale = 1280.0f / frame.cols; 
         cv::Mat small_frame;
         // 使用 LINEAR 保证速度
@@ -110,7 +108,7 @@ private:
         // 保存 Header 用于异步发布
         auto header_copy = msg->header;
 
-        // 【关键】：手动让 UniquePtr 失效，提前释放海康相机的 60MB 原始内存块
+        // 【关键】手动让 UniquePtr 失效，提前释放海康相机的 60MB 原始内存块
         msg.reset(); 
 
         // 6. 异步渲染 (此时原始大内存已归还相机，QT 依然可以满帧显示)

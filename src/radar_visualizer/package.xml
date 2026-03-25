@@ -3,17 +3,23 @@
 <package format="3">
   <name>radar_visualizer</name>
   <version>0.0.0</version>
-  <description>High performance Qt5 Visualizer</description>
-  <maintainer email="your_email@todo.todo">lzhros</maintainer>
-  <license>TODO</license>
+  <description>The Qt-based high-performance radar visualizer client</description>
+  <maintainer email="16355965+lzhzhoukang@user.noreply.gitee.com">lzhros</maintainer>
+  <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
-  <depend>cv_bridge</depend>
   <depend>std_srvs</depend>
-  
+  <depend>cv_bridge</depend>
+
+  <depend>qtbase5-dev</depend>
+  <depend>libopencv-dev</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>

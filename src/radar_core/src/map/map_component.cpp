@@ -27,7 +27,7 @@ public:
         this->declare_parameter<std::string>("map_image", "/home/lzhros/Code/RadarStation/config/map/field_image.png");
         this->declare_parameter<std::string>("mesh_path", "/home/lzhros/Code/RadarStation/config/map/field_mesh.ply");
         
-        // 【新增】：决定雷达站视角的红蓝方阵营开关
+        // 决定雷达站视角的红蓝方阵营开关
         this->declare_parameter<bool>("is_blue_team", true);
         
         camera_yaml_path_ = this->get_parameter("camera_yaml").as_string();

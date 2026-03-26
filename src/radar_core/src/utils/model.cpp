@@ -14,7 +14,6 @@ class Logger : public nvinfer1::ILogger {
 // ==========================================
 // 构造函数
 // ==========================================
-// 接收 use_cuda 参数并初始化
 Model::Model(const std::string modelPath, const int &inputSize, 
              const float &scoreThreshold, const float &nmsThreshold, 
              bool use_cuda) 
@@ -23,7 +22,7 @@ Model::Model(const std::string modelPath, const int &inputSize,
     this->input_h = inputSize;
     this->scoreThreshold = scoreThreshold;
     this->nmsThreshold = nmsThreshold;
-    this->use_cuda_preproc_ = use_cuda; // 记录当前模型是否开启 GPU 加速
+    this->use_cuda_preproc_ = use_cuda; 
     
     std::ifstream engineFile(modelPath, std::ios::binary);
     if(!engineFile.good()){
@@ -58,22 +57,27 @@ Model::Model(const std::string modelPath, const int &inputSize,
 
     int outputSize = 1;
     for(int i=0; i<outputDims.nbDims; ++i) outputSize *= outputDims.d[i];
+    this->output_size_ = outputSize; // 保存总长度，分配内存时使用
 
     std::cout << "Model Loaded: " << modelPath 
               << (use_cuda ? " [CUDA Enabled]" : " [CPU Preproc]") << std::endl;
 
+    // 1. 分配 GPU 显存
     cudaMalloc(&(this->buffer_idx_0), 3 * this->input_h * this->input_w * sizeof(float));
-    cudaMalloc(&(this->buffer_idx_1), outputSize * sizeof(float));
-    this->output_buffer_host.resize(outputSize);
+    cudaMalloc(&(this->buffer_idx_1), this->output_size_ * sizeof(float));
+    
+    // 2. 【核心重构：分配主机端锁页内存】
+    cudaMallocHost((void**)&(this->pinned_in_host), 3 * this->input_h * this->input_w * sizeof(float));
+    cudaMallocHost((void**)&(this->pinned_out_host), this->output_size_ * sizeof(float));
+
     cudaStreamCreate(&(this->stream));
 }
 
 // ==========================================
-//  A：极限性能 GPU 预处理
+// 策略 A：极限性能 GPU 预处理 (保持原样，极其优秀)
 // ==========================================
 void Model::preprocess_cuda(cv::Mat &frame)
 {
-    // 1. 动态管理显存，确保能装下传进来的任意尺寸图片
     int img_size = frame.cols * frame.rows * 3 * sizeof(uint8_t);
     
     if (img_size > this->max_src_size) {
@@ -82,7 +86,6 @@ void Model::preprocess_cuda(cv::Mat &frame)
         this->max_src_size = img_size;
     }
 
-    // 2. 计算缩放与填充参数
     float scale_x = (float)this->input_w / frame.cols;
     float scale_y = (float)this->input_h / frame.rows;
     this->scale = std::min(scale_x, scale_y);
@@ -91,10 +94,8 @@ void Model::preprocess_cuda(cv::Mat &frame)
     this->pad_w = (this->input_w - new_w) / 2;
     this->pad_h = (this->input_h - new_h) / 2;
 
-    // 3. 将原图(通常为大图) 直接通过 PCIe 异步砸入显存
     cudaMemcpyAsync(this->d_src_img, frame.data, img_size, cudaMemcpyHostToDevice, this->stream);
 
-    // 4. 唤醒 CUDA 核函数干活，结果直接存入 TensorRT 的输入端 buffer_idx_0
     launch_preprocess_kernel(
         this->d_src_img, frame.step[0], frame.cols, frame.rows, 
         (float*)this->buffer_idx_0, this->input_w, this->input_h, 
@@ -102,7 +103,7 @@ void Model::preprocess_cuda(cv::Mat &frame)
 }
 
 // ==========================================
-// 策略 B：OpenCV 预处理
+// 策略 B：安全的 CPU 预处理 (重构版)
 // ==========================================
 void Model::preprocess_cpu(cv::Mat &frame)
 {
@@ -115,17 +116,31 @@ void Model::preprocess_cpu(cv::Mat &frame)
     this->pad_w = (this->input_w - new_w) / 2;
     this->pad_h = (this->input_h - new_h) / 2;
 
-    cv::Mat resized, canvas;
+    cv::Mat resized;
     cv::resize(frame, resized, cv::Size(new_w, new_h));
 
-    canvas = cv::Mat::zeros(this->input_h, this->input_w, CV_8UC3);
-    canvas.setTo(cv::Scalar(114, 114, 114));
-    resized.copyTo(canvas(cv::Rect(this->pad_w, this->pad_h, new_w, new_h)));
+    // 【核心重构：手动 Letterbox 填充 + 格式重排】
+    int area = this->input_w * this->input_h;
+    
+    // 1. 先用 114 填满背景 (等同于 cv::Scalar(114,114,114) 的归一化值)
+    std::fill(this->pinned_in_host, this->pinned_in_host + area * 3, 114.0f / 255.0f);
 
-    cv::Mat blob = cv::dnn::blobFromImage(canvas, 1.0/255.0, cv::Size(), cv::Scalar(), true);
+    // 2. 将缩放后的图像数据剥离并塞入锁页内存的中心区域
+    uint8_t* data = resized.data;
+    for (int y = 0; y < new_h; ++y) {
+        for (int x = 0; x < new_w; ++x) {
+            int src_idx = (y * new_w + x) * 3;
+            int dst_idx = (y + this->pad_h) * this->input_w + (x + this->pad_w);
 
-    cudaMemcpyAsync(this->buffer_idx_0, blob.ptr<float>(),
-                    3 * this->input_h * this->input_w * sizeof(float),
+            this->pinned_in_host[dst_idx]            = data[src_idx + 2] / 255.0f; // R
+            this->pinned_in_host[area + dst_idx]     = data[src_idx + 1] / 255.0f; // G
+            this->pinned_in_host[area * 2 + dst_idx] = data[src_idx + 0] / 255.0f; // B
+        }
+    }
+
+    // 3. 此时内存绝对安全，触发极致的 DMA 异步拷贝！
+    cudaMemcpyAsync(this->buffer_idx_0, this->pinned_in_host,
+                    3 * area * sizeof(float),
                     cudaMemcpyHostToDevice, this->stream);
 }
 
@@ -137,7 +152,6 @@ bool Model::Detect(cv::Mat &frame)
     if(frame.empty()) return false;
     this->detectResults.clear();
 
-    //算力路由：根据开关智能选择预处理路线
     if (this->use_cuda_preproc_) {
         preprocess_cuda(frame);
     } else {
@@ -150,8 +164,9 @@ bool Model::Detect(cv::Mat &frame)
     bool status = this->context->enqueueV3(this->stream);
     if(!status) return false;
 
-    cudaMemcpyAsync(this->output_buffer_host.data(), this->buffer_idx_1,
-                    this->output_buffer_host.size() * sizeof(float),
+    // 【核心重构：将结果拷贝回 CPU 的锁页内存中】
+    cudaMemcpyAsync(this->pinned_out_host, this->buffer_idx_1,
+                    this->output_size_ * sizeof(float),
                     cudaMemcpyDeviceToHost, this->stream);
 
     cudaStreamSynchronize(this->stream);
@@ -161,11 +176,12 @@ bool Model::Detect(cv::Mat &frame)
 }
 
 // ==========================================
-// 后处理与清理 
+// 后处理
 // ==========================================
 void Model::postprocessing()
 {
-    float* output = this->output_buffer_host.data();
+    // 【核心重构：直接从锁页内存读取计算结果】
+    float* output = this->pinned_out_host;
     std::vector<cv::Rect> boxes;
     std::vector<int> classIds;
     std::vector<float> confidences;
@@ -210,6 +226,9 @@ void Model::postprocessing()
     }
 }
 
+// ==========================================
+// 析构函数
+// ==========================================
 Model::~Model()
 {
     cudaStreamSynchronize(this->stream);
@@ -217,9 +236,11 @@ Model::~Model()
 
     if(this->buffer_idx_0) cudaFree(this->buffer_idx_0);
     if(this->buffer_idx_1) cudaFree(this->buffer_idx_1);
-    
-    // 新增清理：释放承载大图的额外 GPU 缓存
     if(this->d_src_img) cudaFree(this->d_src_img); 
+
+    // 【核心重构：安全释放锁页内存】
+    if(this->pinned_in_host) cudaFreeHost(this->pinned_in_host);
+    if(this->pinned_out_host) cudaFreeHost(this->pinned_out_host);
 
     delete this->context;
     delete this->engine;

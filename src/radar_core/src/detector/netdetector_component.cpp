@@ -45,7 +45,7 @@ public:
             std::bind(&NetDetectorComponent::imageCallback, this, std::placeholders::_1)
         );
 
-        RCLCPP_INFO(this->get_logger(), "极致丝滑版组件已启动 (包含性能监测)");
+        RCLCPP_INFO(this->get_logger(), "神经网络通道打开");
     }
 
 private:
@@ -86,18 +86,18 @@ private:
         frame_count_++;
 
         // 5. 吞吐率计算与打印
-        auto elapsed_sec = std::chrono::duration<double>(end_time - last_time_).count();
-        if (elapsed_sec >= 1.0) { 
-            double avg_fps = frame_count_ / elapsed_sec;
-            double avg_latency = total_latency_ms_ / frame_count_;
-            RCLCPP_INFO(this->get_logger(), 
-                "[Perf] 吞吐率: %.2f FPS | 神经网络端到端延迟: %.2f ms", 
-                avg_fps, avg_latency);
+        // auto elapsed_sec = std::chrono::duration<double>(end_time - last_time_).count();
+        // if (elapsed_sec >= 1.0) { 
+        //     double avg_fps = frame_count_ / elapsed_sec;
+        //     double avg_latency = total_latency_ms_ / frame_count_;
+        //     RCLCPP_INFO(this->get_logger(), 
+        //         "[Perf] 吞吐率: %.2f FPS | 神经网络端到端延迟: %.2f ms", 
+        //         avg_fps, avg_latency);
             
-            frame_count_ = 0;
-            total_latency_ms_ = 0.0;
-            last_time_ = end_time;
-        }
+        //     frame_count_ = 0;
+        //     total_latency_ms_ = 0.0;
+        //     last_time_ = end_time;
+        // }
 
         //主线程极速缩放 + 内存早释放
         float scale = 1280.0f / frame.cols; 

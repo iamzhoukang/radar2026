@@ -40,7 +40,7 @@ public:
         if (!load_all_configs()) {
             RCLCPP_ERROR(this->get_logger(), "启动失败：参数文件、底图或 3D 网格加载错误！");
         } else {
-            RCLCPP_INFO(this->get_logger(), "数字孪生地图就绪！当前阵营: %s", is_blue_team_ ? "蓝方" : "红方");
+            RCLCPP_INFO(this->get_logger(), "地图就绪！当前阵营: %s", is_blue_team_ ? "蓝方" : "红方");
         }
 
         // 3. 注册 ROS 通信

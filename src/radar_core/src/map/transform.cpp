@@ -35,7 +35,7 @@ namespace radar_core{
             else if (id_char == '2') target_idx = 1;
             else if (id_char == '3') target_idx = 2;
             else if (id_char == '4') target_idx = 3;
-            else if (id_char == '7') target_idx = 5;//4留给5号步兵,接口已经废除默认00
+            else if (id_char == '7') target_idx = 4;
             else return false;
 
             return true;

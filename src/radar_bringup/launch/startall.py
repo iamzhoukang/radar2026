@@ -16,7 +16,7 @@ def generate_launch_description():
     )
     use_video = LaunchConfiguration('use_video')
 
-    # 【新增】：红蓝方阵营开关
+    # 红蓝方阵营开关
     is_blue_team_arg = DeclareLaunchArgument(
         'is_blue_team',
         default_value='true',  # 默认蓝方
@@ -102,7 +102,22 @@ def generate_launch_description():
     )
 
     # ==========================================
-    # 7. 核心容器 (单线程零拷贝主板，绝不抢占相机底层中断)
+    # 7. 串口通信节点 (独立进程启动，防止阻塞视觉容器)
+    # ==========================================
+    serial_standalone_node = Node(
+        package='radar_serial',
+        executable='serial_node',
+        name='serial_node',
+        output='screen',
+        parameters=[{
+            # 注意：若需进行 socat 虚拟串口测试，请将其改回 '/tmp/ttyUSB_RADAR'
+            'port_name': '/tmp/ttyUSB_RADAR',
+            'is_blue_team': is_blue_team  
+        }]
+    )
+
+    # ==========================================
+    # 8. 核心容器 (单线程零拷贝主板，绝不抢占相机底层中断)
     # ==========================================
     container = ComposableNodeContainer(
         name='radar_vision_container',
@@ -121,7 +136,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         use_video_arg, 
-        is_blue_team_arg, # 【新增】：务必在此处注册新参数
+        is_blue_team_arg, 
         container, 
-        visualizer_standalone_node
+        visualizer_standalone_node,
+        serial_standalone_node  
     ])

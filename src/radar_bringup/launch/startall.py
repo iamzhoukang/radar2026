@@ -84,8 +84,8 @@ def generate_launch_description():
         parameters=[{
             'camera_yaml': '/home/lzhros/Code/RadarStation/config/solver/cs200_calibration.yaml',
             'map_yaml': '/home/lzhros/Code/RadarStation/config/map/field_image.yaml',
-            'map_image': '/home/lzhros/Code/RadarStation/config/map/field_image.png',
-            'mesh_path': '/home/lzhros/Code/RadarStation/config/map/RMUC2025_National.PLY',
+            'map_image': '/home/lzhros/Code/RadarStation/config/map/field_image_2026.png',
+            'mesh_path': '/home/lzhros/Code/RadarStation/config/map/RB2026_rmuc.ply',
             'is_blue_team': is_blue_team  
         }],
         extra_arguments=[{'use_intra_process_comms': True}]

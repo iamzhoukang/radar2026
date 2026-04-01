@@ -22,6 +22,10 @@
                 "/opt/ros/humble/include/rcutils",
                 "/opt/ros/humble/include/rmw",
                 "/opt/ros/humble/include/ament_index_cpp",
+                "/opt/ros/humble/include/**",
+                "/usr/include/pcl-1.12",       
+                "/usr/include/eigen3",
+                "/opt/ros/humble/include/pcl_conversions",
                 /* ------ qt ------ */
                 "/usr/include/x86_64-linux-gnu/qt5/**"
             ],

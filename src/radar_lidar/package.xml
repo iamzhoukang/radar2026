@@ -3,23 +3,21 @@
 <package format="3">
   <name>radar_lidar</name>
   <version>0.0.0</version>
-  <description>RoboMaster 2026 雷达站定位与动态感知模块</description>
+  <description>TODO: Package description</description>
   <maintainer email="1875958259@qq.com">lzhros</maintainer>
-  <license>Apache-2.0</license>
+  <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
-  <depend>rclcpp_components</depend> <depend>sensor_msgs</depend>
+  <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_sensor_msgs</depend>
-  <depend>tf2_eigen</depend>
   <depend>pcl_conversions</depend>
   <depend>pcl_ros</depend>
   <depend>radar_interfaces</depend>
-  <depend>eigen</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

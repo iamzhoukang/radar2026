@@ -7,25 +7,25 @@ from launch_ros.descriptions import ComposableNode
 
 def generate_launch_description():
     # ==========================================
-    # 0. 定义外部参数开关 (支持终端动态传参)
+    # 0. 定义外部参数开关
     # ==========================================
     use_video_arg = DeclareLaunchArgument(
-        'use_video',
-        default_value='false',  
-        description='是否使用视频进行离线测试'
+        'use_video', default_value='false', description='是否使用视频进行离线测试'
     )
     use_video = LaunchConfiguration('use_video')
 
-    # 红蓝方阵营开关
     is_blue_team_arg = DeclareLaunchArgument(
-        'is_blue_team',
-        default_value='true',  # 默认蓝方
-        description='雷达站所属阵营:true为蓝方,false为红方'
+        'is_blue_team', default_value='true', description='雷达站所属阵营'
     )
     is_blue_team = LaunchConfiguration('is_blue_team')
 
+    lab_mode_arg = DeclareLaunchArgument(
+        'lab_mode', default_value='true', description='开启实验室模式(跳过雷达建图对齐)'
+    )
+    lab_mode = LaunchConfiguration('lab_mode')
+
     # ==========================================
-    # 1. 视频组件 (零拷贝插件)
+    # 1. 视觉管线节点 (纯视觉处理)
     # ==========================================
     video_node = ComposableNode(
         condition=IfCondition(use_video),
@@ -37,9 +37,6 @@ def generate_launch_description():
         remappings=[('video_topic', 'cs200_topic')] 
     )
 
-    # ==========================================
-    # 2. 相机组件 (零拷贝插件)
-    # ==========================================
     camera_node = ComposableNode(
         condition=UnlessCondition(use_video),
         package='radar_core',
@@ -49,9 +46,6 @@ def generate_launch_description():
         remappings=[('camera_original_topic_name', 'cs200_topic')] 
     )
 
-    # ==========================================
-    # 3. 神经网络组件 (纯地面装甲板模式)
-    # ==========================================
     detector_node = ComposableNode(
         package='radar_core',
         plugin='radar_core::NetDetectorComponent',
@@ -60,9 +54,6 @@ def generate_launch_description():
         extra_arguments=[{'use_intra_process_comms': True}]  
     )
 
-    # ==========================================
-    # 4. 单帧标定组件
-    # ==========================================
     solvepnp_node = ComposableNode(
         package='radar_core',
         plugin='radar_core::SolvePnPComponent',
@@ -74,9 +65,6 @@ def generate_launch_description():
         extra_arguments=[{'use_intra_process_comms': True}]
     )
 
-    # ==========================================
-    # 5. 小地图映射组件 (已加入 Open3D 场地网格路径与阵营参数)
-    # ==========================================
     map_node = ComposableNode(
         package='radar_core',
         plugin='radar_core::MapComponent',
@@ -92,7 +80,46 @@ def generate_launch_description():
     )
 
     # ==========================================
-    # 6. Qt 可视化客户端 (独立进程启动)
+    # 2. 雷达管线节点 (点云处理与防空感知)
+    # ==========================================
+    localization_node = ComposableNode(
+        package='radar_lidar',
+        plugin='radar_lidar::Localization',
+        name='localization_node',
+        parameters=[{
+            'map_pcd_path': '/home/lzhros/Code/RadarStation/config/lidar/RB2026_rmuc.pcd',
+            'lab_mode': lab_mode
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}]
+    )
+
+    dynamic_cloud_node = ComposableNode(
+        package='radar_lidar',
+        plugin='radar_lidar::DynamicCloud',
+        name='dynamic_cloud_node',
+        parameters=[{
+            'map_pcd_path': '/home/lzhros/Code/RadarStation/config/lidar/RB2026_rmuc.pcd',
+            'distance_threshold': 0.20
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}]
+    )
+
+    cluster_node = ComposableNode(
+        package='radar_lidar',
+        plugin='radar_lidar::ClusterNode',
+        name='cluster_node',
+        parameters=[{
+            'cluster_tolerance': 0.6,
+            'min_cluster_size': 15,
+            'max_cluster_size': 2000,
+            'drone_min_size': 5,
+            'drone_min_height': 1.2
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}]
+    )
+
+    # ==========================================
+    # 3. 独立外设节点
     # ==========================================
     visualizer_standalone_node = Node(
         package='radar_visualizer',
@@ -101,43 +128,39 @@ def generate_launch_description():
         output='screen'
     )
 
-    # ==========================================
-    # 7. 串口通信节点 (独立进程启动，防止阻塞视觉容器)
-    # ==========================================
     serial_standalone_node = Node(
         package='radar_serial',
         executable='serial_node',
         name='serial_node',
         output='screen',
-        parameters=[{
-            # 注意：若需进行 socat 虚拟串口测试，请将其改回 '/tmp/ttyUSB_RADAR'
-            'port_name': '/tmp/ttyUSB_RADAR',
-            'is_blue_team': is_blue_team  
-        }]
+        parameters=[{'port_name': '/tmp/ttyUSB_RADAR', 'is_blue_team': is_blue_team}]
     )
 
     # ==========================================
-    # 8. 核心容器 (单线程零拷贝主板，绝不抢占相机底层中断)
+    # 4. 双核心装配
     # ==========================================
-    container = ComposableNodeContainer(
+    # 视觉大脑：单线程，保证图像流不被打断
+    vision_container = ComposableNodeContainer(
         name='radar_vision_container',
         namespace='',
         package='rclcpp_components',
         executable='component_container', 
-        composable_node_descriptions=[
-            video_node,      
-            camera_node,   
-            detector_node,
-            solvepnp_node,   
-            map_node,       
-        ],
+        composable_node_descriptions=[video_node, camera_node, detector_node, solvepnp_node, map_node],
+        output='screen',
+    )
+
+    # 雷达大脑：多线程 (component_container_mt)，榨干 CPU 算力处理数十万点云
+    lidar_container = ComposableNodeContainer(
+        name='radar_lidar_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container_mt', 
+        composable_node_descriptions=[localization_node, dynamic_cloud_node, cluster_node],
         output='screen',
     )
 
     return LaunchDescription([
-        use_video_arg, 
-        is_blue_team_arg, 
-        container, 
-        visualizer_standalone_node,
-        serial_standalone_node  
+        use_video_arg, is_blue_team_arg, lab_mode_arg,
+        vision_container, lidar_container,
+        visualizer_standalone_node, serial_standalone_node  
     ])

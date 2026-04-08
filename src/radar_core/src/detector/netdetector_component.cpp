@@ -16,7 +16,8 @@
 namespace radar_core 
 {
 
-enum TargetType { ROBOT = 0, ARMOR = 1 };
+// 目标类型枚举
+enum TargetType { ROBOT = 0, ARMOR = 1, DRONE = 2 };
 
 struct DetectObject {
     cv::Rect rect;       
@@ -45,12 +46,13 @@ public:
             std::bind(&NetDetectorComponent::imageCallback, this, std::placeholders::_1)
         );
 
-        RCLCPP_INFO(this->get_logger(), "神经网络通道打开");
+        RCLCPP_INFO(this->get_logger(), "\033[1;32m[Vision] 神经网络引擎已点火！装甲板与空中目标级联检测启动\033[0m");
     }
 
 private:
     std::unique_ptr<Model> robot_model_;
     std::unique_ptr<Model> armor_model_;
+    std::unique_ptr<Model> plane_model_; // 空中目标模型
     std::unique_ptr<Classifier> classifier_model_; 
 
     std::vector<std::string> classifier_labels_; 
@@ -67,10 +69,9 @@ private:
 
     void imageCallback(sensor_msgs::msg::Image::UniquePtr msg) 
     {
-        // 开始计时：神经网络端到端延迟
         auto start_time = std::chrono::steady_clock::now();
 
-        // 1. 内存映射
+        // 1. 内存映射 (零拷贝处理海康原始内存)
         cv::Mat frame(msg->height, msg->width, CV_8UC3, msg->data.data());
 
         // 2. 神经网络推理
@@ -79,39 +80,34 @@ private:
         // 3. 发布目标坐标
         publish_results(objects, msg->header);
 
-        // 4. 计算并累加延迟
+        // 4. 延迟累加的性能监视器 (每 30 帧打印一次)
         auto end_time = std::chrono::steady_clock::now();
         double latency = std::chrono::duration<double, std::milli>(end_time - start_time).count();
         total_latency_ms_ += latency;
         frame_count_++;
 
-        // 5. 吞吐率计算与打印
-        // auto elapsed_sec = std::chrono::duration<double>(end_time - last_time_).count();
-        // if (elapsed_sec >= 1.0) { 
-        //     double avg_fps = frame_count_ / elapsed_sec;
-        //     double avg_latency = total_latency_ms_ / frame_count_;
-        //     RCLCPP_INFO(this->get_logger(), 
-        //         "[Perf] 吞吐率: %.2f FPS | 神经网络端到端延迟: %.2f ms", 
-        //         avg_fps, avg_latency);
+        if (frame_count_ % 30 == 0) {
+            auto elapsed_sec = std::chrono::duration<double>(end_time - last_time_).count();
+            double avg_fps = 30.0 / elapsed_sec;
+            double avg_latency = total_latency_ms_ / 30.0;
+            RCLCPP_INFO(this->get_logger(), 
+                "[Vision] %.1f FPS | 推理延迟: %.1f ms | 视野目标: %zu", 
+                avg_fps, avg_latency, objects.size());
             
-        //     frame_count_ = 0;
-        //     total_latency_ms_ = 0.0;
-        //     last_time_ = end_time;
-        // }
+            total_latency_ms_ = 0.0;
+            last_time_ = end_time;
+        }
 
-        //主线程极速缩放 + 内存早释放
+        // 5. 图像降采样，准备发给可视化
         float scale = 1280.0f / frame.cols; 
         cv::Mat small_frame;
-        // 使用 LINEAR 保证速度
         cv::resize(frame, small_frame, cv::Size(), scale, scale, cv::INTER_LINEAR); 
 
-        // 保存 Header 用于异步发布
+        // 6. 内存早释放机制
         auto header_copy = msg->header;
-
-        // 【关键】手动让 UniquePtr 失效，提前释放海康相机的 60MB 原始内存块
         msg.reset(); 
 
-        // 6. 异步渲染 (此时原始大内存已归还相机，QT 依然可以满帧显示)
+        // 7. 异步渲染 (把耗时的画框和 JPEG/ROS 编码丢给后台线程)
         std::thread([this, small_frame, objects, header_copy]() mutable {
             publish_processed_video(small_frame, objects, header_copy);
         }).detach();
@@ -120,32 +116,65 @@ private:
     std::vector<DetectObject> process_frame(cv::Mat& frame) 
     {
         std::vector<DetectObject> final_objects;
+
+        // ==========================================
+        // 通道 1：地面机器人与装甲板数字联级
+        // ==========================================
         if (robot_model_->Detect(frame)) {
             for (const auto& robot_res : robot_model_->detectResults) {
                 cv::Rect robot_roi = robot_res.box & cv::Rect(0, 0, frame.cols, frame.rows);
                 if (robot_roi.area() <= 0) continue;
+                
                 cv::Mat robot_img = frame(robot_roi);
+
+                // 在车辆内部搜寻装甲板
                 if (armor_model_->Detect(robot_img) && !armor_model_->detectResults.empty()) {
+                    // 取置信度最高的一块装甲板
                     auto best_armor_it = std::max_element(
                         armor_model_->detectResults.begin(), armor_model_->detectResults.end(),
                         [](const Result& a, const Result& b) { return a.confidence < b.confidence; }
                     );
                     const auto& armor_res = *best_armor_it;
+                    
                     cv::Rect armor_rect_global(armor_res.box.x + robot_roi.x, armor_res.box.y + robot_roi.y, armor_res.box.width, armor_res.box.height);
                     cv::Rect num_roi = armor_rect_global & cv::Rect(0, 0, frame.cols, frame.rows);
                     if (num_roi.area() <= 0) continue;
+                    
+                    // 数字分类识别
                     cv::Mat number_img = frame(num_roi);
                     float num_confidence = 0.0f;
                     int class_id = classifier_model_->Classify(number_img, num_confidence);
                     std::string label = (class_id >= 0 && class_id < classifier_labels_.size()) ? classifier_labels_[class_id] : "Unknown";
+                    
                     DetectObject obj;
                     obj.rect = armor_rect_global;
                     obj.label = label;
+                    obj.type = ARMOR; 
+                    obj.confidence = armor_res.confidence;
                     obj.center = cv::Point2f(armor_rect_global.x + armor_rect_global.width / 2.0f, armor_rect_global.y + armor_rect_global.height / 2.0f);
                     final_objects.push_back(obj);
-                }
+                }   
             }
         }
+
+        // ==========================================
+        // 通道 2：空中目标 (飞机/无人机) 全图扫描
+        // ==========================================
+        if (plane_model_ && plane_model_->Detect(frame)) {
+            for (const auto& plane_res : plane_model_->detectResults) {
+                cv::Rect plane_roi = plane_res.box & cv::Rect(0, 0, frame.cols, frame.rows);
+                if (plane_roi.area() <= 0) continue;
+
+                DetectObject obj;
+                obj.rect = plane_roi;
+                obj.label = "Drone"; // 固定标签向后传递
+                obj.type = DRONE;    
+                obj.confidence = plane_res.confidence;
+                obj.center = cv::Point2f(plane_roi.x + plane_roi.width / 2.0f, plane_roi.y + plane_roi.height / 2.0f);
+                final_objects.push_back(obj);
+            }
+        }
+
         return final_objects;
     }
 
@@ -155,8 +184,9 @@ private:
         results_msg.header = header;
         for(const auto &obj : objects){
             radar_interfaces::msg::DetectResult res;
-            res.number = obj.label;
-            res.x = obj.center.x; res.y = obj.center.y;
+            res.number = obj.label; 
+            res.x = obj.center.x; 
+            res.y = obj.center.y;
             results_msg.results.push_back(res);
         }
         pub_results_->publish(results_msg);
@@ -164,11 +194,14 @@ private:
 
     void publish_processed_video(cv::Mat& small_frame, const std::vector<DetectObject>& objects, const std_msgs::msg::Header& header)
     {
-        // 这里的 small_frame 已经是 1280 宽度了，直接画框
-        float scale = 1280.0f / 5472.0f; // 假设原图宽度，请根据实际修改
+        float scale = 1280.0f / 5472.0f; // 缩放系数匹配海康原图
         for(const auto &obj : objects){
             cv::Rect scaled_rect(obj.rect.x * scale, obj.rect.y * scale, obj.rect.width * scale, obj.rect.height * scale);
-            cv::rectangle(small_frame, scaled_rect, cv::Scalar(0, 255, 0), 1);
+            
+            // 颜色区分：无人机画橙色框，装甲板画绿色框
+            cv::Scalar color = (obj.type == DRONE) ? cv::Scalar(0, 165, 255) : cv::Scalar(0, 255, 0);
+            
+            cv::rectangle(small_frame, scaled_rect, color, 2);
             cv::putText(small_frame, obj.label, scaled_rect.tl(), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
         }
         auto out_msg = cv_bridge::CvImage(header, "bgr8", small_frame).toImageMsg();
@@ -181,13 +214,33 @@ private:
     }
 
     void init_models(){
-        try{
+        try {
             YAML::Node config = YAML::LoadFile(config_file_path_);
+            
+            // 1. 加载地面系模型
             robot_model_ = std::make_unique<Model>(config["robot_modelpath"].as<std::string>(), config["robot_inputSize"].as<int>(), config["robot_scoreThresh"].as<float>(), config["robot_nmsThresh"].as<float>(), true);
             armor_model_ = std::make_unique<Model>(config["armor_modelpath"].as<std::string>(), config["armor_inputSize"].as<int>(), config["armor_scoreThresh"].as<float>(), config["armor_nmsThresh"].as<float>(), false);
             classifier_model_ = std::make_unique<Classifier>(config["classifier_modelpath"].as<std::string>(), config["classifier_inputSize"].as<int>());
             for (const auto &item : config["classifier_labels"]) classifier_labels_.push_back(item.second.as<std::string>());
-        }catch(const std::exception &e){ RCLCPP_ERROR(this->get_logger(), "模型初始化失败: %s", e.what()); }
+            
+            // 2. 加载防空系模型 
+            try {
+                if (config["plane_modelpath"]) {
+                    plane_model_ = std::make_unique<Model>(
+                        config["plane_modelpath"].as<std::string>(), 
+                        config["plane_inputSize"].as<int>(), 
+                        config["plane_scoreThresh"].as<float>(), 
+                        config["plane_nmsThresh"].as<float>(), 
+                        true // 开启 FP16 TensorRT 加速
+                    );
+                }
+            } catch (const std::exception &e) {
+                RCLCPP_WARN(this->get_logger(), "未找到或无法加载防空网络模型(plane_modelpath): %s", e.what());
+            }
+
+        } catch(const std::exception &e) { 
+            RCLCPP_ERROR(this->get_logger(), "核心神经网络初始化失败: %s", e.what()); 
+        }
     }
 };
 

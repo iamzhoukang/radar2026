@@ -99,9 +99,14 @@ private:
             data.ally_infantry_3_position_y = static_cast<uint16_t>(ally_y[2] * 100.0f);
             data.ally_infantry_4_position_x = static_cast<uint16_t>(ally_x[3] * 100.0f);
             data.ally_infantry_4_position_y = static_cast<uint16_t>(ally_y[3] * 100.0f);
-            data.ally_sentry_position_x     = static_cast<uint16_t>(ally_x[4] * 100.0f);
-            data.ally_sentry_position_y     = static_cast<uint16_t>(ally_y[4] * 100.0f);
-            data.ally_aerial_position_x     = 0; // 无人机暂不处理
+            
+            // 己方无人机默认发送 (0,0)
+            data.ally_aerial_position_x     = 0; 
+            data.ally_aerial_position_y     = 0;
+            
+            // 哨兵对应的索引是 5
+            data.ally_sentry_position_x     = static_cast<uint16_t>(ally_x[5] * 100.0f);
+            data.ally_sentry_position_y     = static_cast<uint16_t>(ally_y[5] * 100.0f);
 
             // --- 对方装填 (米 -> 厘米) ---
             data.opponent_hero_position_x       = static_cast<uint16_t>(oppo_x[0] * 100.0f);
@@ -112,24 +117,31 @@ private:
             data.opponent_infantry_3_position_y = static_cast<uint16_t>(oppo_y[2] * 100.0f);
             data.opponent_infantry_4_position_x = static_cast<uint16_t>(oppo_x[3] * 100.0f);
             data.opponent_infantry_4_position_y = static_cast<uint16_t>(oppo_y[3] * 100.0f);
-            data.opponent_sentry_position_x     = static_cast<uint16_t>(oppo_x[4] * 100.0f);
-            data.opponent_sentry_position_y     = static_cast<uint16_t>(oppo_y[4] * 100.0f);
-            data.opponent_aerial_position_x     = 0;
+            
+            // 获取解算出的对方无人机坐标 (索引为 4)
+            data.opponent_aerial_position_x     = static_cast<uint16_t>(oppo_x[4] * 100.0f);
+            data.opponent_aerial_position_y     = static_cast<uint16_t>(oppo_y[4] * 100.0f);
+
+            // 哨兵对应的索引是 5
+            data.opponent_sentry_position_x     = static_cast<uint16_t>(oppo_x[5] * 100.0f);
+            data.opponent_sentry_position_y     = static_cast<uint16_t>(oppo_y[5] * 100.0f);
         }
 
         // 发送串口包 0x0305
         driver_->sendPacket(CMD_ID_RADAR_MAP, reinterpret_cast<uint8_t*>(&data), sizeof(data));
 
-        // 核心要求：保留并全量输出调试信息
+        // 核心要求：保留并全量输出调试信息，加入对方空军的打印
         RCLCPP_INFO(this->get_logger(),
             "\n=== 发送 0x0305 坐标包 (5Hz) ===\n"
-            "[对方] 英:(%d,%d) 工:(%d,%d) 步3:(%d,%d) 步4:(%d,%d) 哨:(%d,%d) 空:未部署\n"
-            "[己方] 英:(%d,%d) 工:(%d,%d) 步3:(%d,%d) 步4:(%d,%d) 哨:(%d,%d) 空:未部署",
+            "[对方] 英:(%d,%d) 工:(%d,%d) 步3:(%d,%d) 步4:(%d,%d) 哨:(%d,%d) 空:(%d,%d)\n"
+            "[己方] 英:(%d,%d) 工:(%d,%d) 步3:(%d,%d) 步4:(%d,%d) 哨:(%d,%d) 空:(0,0)",
             data.opponent_hero_position_x, data.opponent_hero_position_y,
             data.opponent_engineer_position_x, data.opponent_engineer_position_y,
             data.opponent_infantry_3_position_x, data.opponent_infantry_3_position_y,
             data.opponent_infantry_4_position_x, data.opponent_infantry_4_position_y,
             data.opponent_sentry_position_x, data.opponent_sentry_position_y,
+            data.opponent_aerial_position_x, data.opponent_aerial_position_y, // 新增对方空军展示
+            
             data.ally_hero_position_x, data.ally_hero_position_y,
             data.ally_engineer_position_x, data.ally_engineer_position_y,
             data.ally_infantry_3_position_x, data.ally_infantry_3_position_y,

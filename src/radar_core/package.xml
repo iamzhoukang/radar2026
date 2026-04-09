@@ -2,10 +2,10 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>radar_core</name>
-  <version>0.0.0</version>
-  <description>Radar Station Core Package</description>
+  <version>1.0.0</version>
+  <description>Radar Station Core Package - Multi-Modal Fusion and HKUST Cascade Tracker</description>
   <maintainer email="16355965+lzhzhoukang@user.noreply.gitee.com">lzhros</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Apache 2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
@@ -18,6 +18,8 @@
   <depend>yaml-cpp</depend>
   <depend>std_srvs</depend>
   <depend>Open3D</depend>
+  
+  <depend>eigen</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

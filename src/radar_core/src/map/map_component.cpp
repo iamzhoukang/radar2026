@@ -5,6 +5,7 @@
 #include <yaml-cpp/yaml.h>
 #include <vector>
 #include <string>
+#include <chrono>
 
 #include "map/transform.hpp"
 #include "map/raycaster.hpp"
@@ -14,6 +15,8 @@
 #include "radar_interfaces/msg/radar_map.hpp" 
 #include "radar_interfaces/msg/lidar_cluster_results.hpp" 
 #include "std_srvs/srv/trigger.hpp"
+
+#include "tracker/cascade_tracker.hpp"
 
 namespace radar_core {
 
@@ -37,7 +40,7 @@ public:
         if (!load_all_configs()) {
             RCLCPP_ERROR(this->get_logger(), "启动失败：参数文件、底图或 3D 网格加载错误！");
         } else {
-            RCLCPP_INFO(this->get_logger(), "\033[1;32m多模态小地图就绪！当前阵营: %s\033[0m", is_blue_team_ ? "蓝方" : "红方");
+            RCLCPP_INFO(this->get_logger(), "\033[1;32m多模态小地图就绪！已挂载 HKUST 级联匹配追踪引擎 | 阵营: %s\033[0m", is_blue_team_ ? "蓝方" : "红方");
         }
 
         sub_results_ = this->create_subscription<radar_interfaces::msg::DetectResults>(
@@ -45,7 +48,6 @@ public:
             std::bind(&MapComponent::results_callback, this, std::placeholders::_1)
         );
 
-        // 订阅雷达聚类结果
         sub_radar_ = this->create_subscription<radar_interfaces::msg::LidarClusterResults>(
             "/radar/lidar_clusters", 10,
             std::bind(&MapComponent::radar_callback, this, std::placeholders::_1)
@@ -57,6 +59,8 @@ public:
             "map/reload_config",
             std::bind(&MapComponent::handle_reload, this, std::placeholders::_1, std::placeholders::_2)
         );
+        
+        last_time_ = std::chrono::steady_clock::now();
     }
 
 private:
@@ -64,8 +68,8 @@ private:
     bool is_blue_team_ = true;
     
     rclcpp::Subscription<radar_interfaces::msg::DetectResults>::SharedPtr sub_results_;
-    rclcpp::Subscription<radar_interfaces::msg::LidarClusterResults>::SharedPtr sub_radar_; // 雷达订阅器
-    radar_interfaces::msg::LidarClusterResults::SharedPtr latest_radar_msg_;              // 雷达最新缓存
+    rclcpp::Subscription<radar_interfaces::msg::LidarClusterResults>::SharedPtr sub_radar_; 
+    radar_interfaces::msg::LidarClusterResults::SharedPtr latest_radar_msg_;              
 
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_map_img_;
     rclcpp::Publisher<radar_interfaces::msg::RadarMap>::SharedPtr pub_official_;
@@ -76,6 +80,10 @@ private:
     int map_w_ = 772, map_h_ = 388;
 
     utils::Raycaster raycaster_;
+
+    // 【新增】港科大级联追踪引擎实例与时间戳
+    tracker::CascadeMatchTracker hkust_tracker_;
+    std::chrono::steady_clock::time_point last_time_;
 
     void handle_reload(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
                        std::shared_ptr<std_srvs::srv::Trigger::Response> response)
@@ -90,7 +98,6 @@ private:
         }
     }
 
-    // 雷达缓存回调
     void radar_callback(const radar_interfaces::msg::LidarClusterResults::SharedPtr msg)
     {
         latest_radar_msg_ = msg;
@@ -100,41 +107,38 @@ private:
     {
         if (K_.empty() || base_map_.empty()) return;
 
+        // 计算时间差 (dt)，用于卡尔曼滤波器的速度推算
+        auto current_time = std::chrono::steady_clock::now();
+        float dt = std::chrono::duration<float>(current_time - last_time_).count();
+        if (dt > 1.0f || dt <= 0.0f) dt = 0.1f; // 保护机制，防止首帧 dt 过大
+        last_time_ = current_time;
+
         cv::Mat draw_map = base_map_.clone();
         radar_interfaces::msg::RadarMap official_msg;
         official_msg.header = msg->header;
 
-        for (const auto& res : msg->results) {
-            
-            cv::Point3f mesh_pt;
+        std::vector<tracker::SingleDetectionResult> hku_dets;
 
+        for (const auto& res : msg->results) {
             // ==========================================
-            // 核心：多模态空间解算分流
+            // 【免检通道】无人机专属 3D 雷达投影逻辑
             // ==========================================
-            if (res.number == "Drone") {
-                // 【模式 A：空对空】3D 雷达坐标 -> 2D 像素投影匹配
-                if (!latest_radar_msg_ || latest_radar_msg_->clusters.empty()) continue; // 没有雷达则无法定位天空
+            if (res.class_id == -2 || res.number == "Drone") {
+                if (!latest_radar_msg_ || latest_radar_msg_->clusters.empty()) continue; 
 
                 float min_dist = 1e9;
                 bool matched = false;
                 cv::Point3f best_pt;
 
                 for (const auto& cluster : latest_radar_msg_->clusters) {
-                    // 我们底层雷达发来的 Z 已经是离地绝对高度，滤除地面目标 (比如高度低于 1.0m 的)
                     if (cluster.center.z < 1.0) continue; 
-
                     std::vector<cv::Point3f> obj_pts = { cv::Point3f(cluster.center.x, cluster.center.y, cluster.center.z) };
                     std::vector<cv::Point2f> img_pts;
-                    
-                    // 神奇的数学：用相机的内参和外参，将 3D 点“拍扁”到照片像素上！
                     cv::projectPoints(obj_pts, rvec_, T_, K_, D_, img_pts);
-
-                    // 检查拍扁后的像素点，与 YOLO 识别框中心的距离
+                    
                     float dx = img_pts[0].x - res.x;
                     float dy = img_pts[0].y - res.y;
                     float dist = std::sqrt(dx*dx + dy*dy);
-
-                    // 如果误差在 200 个像素点以内，且是目前最小的，即视为锁定目标！
                     if (dist < min_dist && dist < 200.0f) {
                         min_dist = dist;
                         best_pt = obj_pts[0];
@@ -142,42 +146,69 @@ private:
                     }
                 }
 
-                if (!matched) continue; // 雷达没扫到或对应不上，放弃发送此目标
-                mesh_pt = best_pt;      // 拿走真实 3D 物理坐标！
-
-            } else {
-                // 【模式 B：地对地】2D 像素 -> 3D 模型光线追踪求交 (你之前的完美逻辑)
-                mesh_pt = raycaster_.pixelToWorld(cv::Point2f(res.x, res.y), K_, D_, R_inv_, T_);
+                if (matched) {
+                    cv::Point2f off_pt = utils::convertToOfficialMap(best_pt, field_length_, field_width_, is_blue_team_);
+                    official_msg.blue_x[4] = official_msg.red_x[4] = off_pt.x;
+                    official_msg.blue_y[4] = official_msg.red_y[4] = off_pt.y;
+                    
+                    int px = (int)((off_pt.x / field_length_) * map_w_);
+                    int py = (int)((1.0f - off_pt.y / field_width_) * map_h_);
+                    draw_on_map(draw_map, px, py, "Drone");
+                }
+                continue; // 无人机不进追踪器，直接跳过后续处理！
             }
 
             // ==========================================
-            // 封装与发送
+            // 【地面通道】光线追踪解算并装填给 HKUST Tracker
             // ==========================================
-            char team;
-            int target_idx;
-            if (utils::parseTargetLabel(res.number, team, target_idx)) {
-                
-                cv::Point2f official_pt = utils::convertToOfficialMap(mesh_pt, field_length_, field_width_, is_blue_team_);
-                
-                if (team == 'B' || team == 'b') {
-                    official_msg.blue_x[target_idx] = official_pt.x;
-                    official_msg.blue_y[target_idx] = official_pt.y;
-                } else if (team == 'R' || team == 'r') {
-                    official_msg.red_x[target_idx] = official_pt.x;
-                    official_msg.red_y[target_idx] = official_pt.y;
-                } else if (team == 'A') {
-                    // 无人机数据：同时填充双方的 `[4]` 号索引空位
-                    official_msg.blue_x[target_idx] = official_pt.x;
-                    official_msg.blue_y[target_idx] = official_pt.y;
-                    official_msg.red_x[target_idx] = official_pt.x;
-                    official_msg.red_y[target_idx] = official_pt.y;
-                }
+            cv::Point3f mesh_pt = raycaster_.pixelToWorld(cv::Point2f(res.x, res.y), K_, D_, R_inv_, T_);
+            
+            // 将 mesh 坐标立刻转为裁判系统绝对场地坐标 (UWB 坐标)
+            cv::Point2f official_pt = utils::convertToOfficialMap(mesh_pt, field_length_, field_width_, is_blue_team_);
 
-                float norm_x = official_pt.x / field_length_;
-                float norm_y = 1.0f - (official_pt.y / field_width_); 
-                int px = (int)(norm_x * map_w_);
-                int py = (int)(norm_y * map_h_);
-                draw_on_map(draw_map, px, py, res.number); 
+            tracker::SingleDetectionResult det;
+            det.class_id = res.class_id;
+            det.class_conf = res.class_conf;
+            det.car_box = cv::Rect2f(res.x - res.width/2.0f, res.y - res.height/2.0f, res.width, res.height);
+            det.car_conf = res.car_conf;
+            // 将场地绝对坐标装填给 Tracker，便于它算物理运动的 Kalman
+            det.pos_3d = cv::Point3f(official_pt.x, official_pt.y, 0.0f); 
+            det.bot_id = res.bot_id;
+
+            hku_dets.push_back(det);
+        }
+
+        // ==========================================
+        // 🌟 一键呼叫港科大级联追踪引擎！
+        // ==========================================
+        hkust_tracker_.track(hku_dets, dt);
+
+        // ==========================================
+        // 提取极度平滑的坐标并发往串口
+        // ==========================================
+        for (const auto& track : hkust_tracker_.tracks) {
+            if (track.is_active) {
+                char team;
+                int target_idx;
+                if (utils::parseTargetLabel(track.name, team, target_idx)) {
+                    
+                    // 获取 KF 平滑、抗抖动后的 2D 绝对坐标
+                    float smooth_x = track.pos_2d_uwb.x;
+                    float smooth_y = track.pos_2d_uwb.y;
+
+                    if (team == 'B' || team == 'b') {
+                        official_msg.blue_x[target_idx] = smooth_x;
+                        official_msg.blue_y[target_idx] = smooth_y;
+                    } else if (team == 'R' || team == 'r') {
+                        official_msg.red_x[target_idx] = smooth_x;
+                        official_msg.red_y[target_idx] = smooth_y;
+                    }
+
+                    // 绘制平滑后的小地图像素位置
+                    int px = (int)((smooth_x / field_length_) * map_w_);
+                    int py = (int)((1.0f - smooth_y / field_width_) * map_h_);
+                    draw_on_map(draw_map, px, py, track.name); 
+                }
             }
         }
 
@@ -197,7 +228,7 @@ private:
         if (!label.empty()) {
             if (label[0] == 'R' || label[0] == 'r') color = cv::Scalar(0, 0, 255); 
             else if (label[0] == 'B' || label[0] == 'b') color = cv::Scalar(255, 0, 0); 
-            else if (label == "Drone") color = cv::Scalar(0, 165, 255); // 无人机画橙色
+            else if (label == "Drone") color = cv::Scalar(0, 165, 255); 
         }
         cv::circle(img, cv::Point(px, py), 10, cv::Scalar(255, 255, 255), -1); 
         cv::circle(img, cv::Point(px, py), 8, color, -1);

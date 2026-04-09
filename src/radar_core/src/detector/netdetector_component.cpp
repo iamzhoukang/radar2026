@@ -19,11 +19,14 @@ namespace radar_core
 // 目标类型枚举
 enum TargetType { ROBOT = 0, ARMOR = 1, DRONE = 2 };
 
+// 扩充的内部检测对象结构体
 struct DetectObject {
     cv::Rect rect;       
     int class_id;        
     std::string label;   
-    float confidence;    
+    float class_conf;    // 分类置信度
+    float car_conf;      // 车辆检测置信度
+    int bot_id;          // 底层追踪ID (预留)
     TargetType type;     
     cv::Point2f center;  
 };
@@ -46,13 +49,13 @@ public:
             std::bind(&NetDetectorComponent::imageCallback, this, std::placeholders::_1)
         );
 
-        RCLCPP_INFO(this->get_logger(), "\033[1;32m[Vision] 神经网络引擎已点火！装甲板与空中目标级联检测启动\033[0m");
+        RCLCPP_INFO(this->get_logger(), "\033[1;32m[Vision] 神经网络引擎已点火！多维度信息(置信度/宽高)输出就绪\033[0m");
     }
 
 private:
     std::unique_ptr<Model> robot_model_;
     std::unique_ptr<Model> armor_model_;
-    std::unique_ptr<Model> plane_model_; // 空中目标模型
+    std::unique_ptr<Model> plane_model_; 
     std::unique_ptr<Classifier> classifier_model_; 
 
     std::vector<std::string> classifier_labels_; 
@@ -71,16 +74,12 @@ private:
     {
         auto start_time = std::chrono::steady_clock::now();
 
-        // 1. 内存映射 (零拷贝处理海康原始内存)
         cv::Mat frame(msg->height, msg->width, CV_8UC3, msg->data.data());
 
-        // 2. 神经网络推理
         std::vector<DetectObject> objects = process_frame(frame);
 
-        // 3. 发布目标坐标
         publish_results(objects, msg->header);
 
-        // 4. 延迟累加的性能监视器 (每 30 帧打印一次)
         auto end_time = std::chrono::steady_clock::now();
         double latency = std::chrono::duration<double, std::milli>(end_time - start_time).count();
         total_latency_ms_ += latency;
@@ -98,16 +97,13 @@ private:
             last_time_ = end_time;
         }
 
-        // 5. 图像降采样，准备发给可视化
         float scale = 1280.0f / frame.cols; 
         cv::Mat small_frame;
         cv::resize(frame, small_frame, cv::Size(), scale, scale, cv::INTER_LINEAR); 
 
-        // 6. 内存早释放机制
         auto header_copy = msg->header;
         msg.reset(); 
 
-        // 7. 异步渲染 (把耗时的画框和 JPEG/ROS 编码丢给后台线程)
         std::thread([this, small_frame, objects, header_copy]() mutable {
             publish_processed_video(small_frame, objects, header_copy);
         }).detach();
@@ -127,9 +123,7 @@ private:
                 
                 cv::Mat robot_img = frame(robot_roi);
 
-                // 在车辆内部搜寻装甲板
                 if (armor_model_->Detect(robot_img) && !armor_model_->detectResults.empty()) {
-                    // 取置信度最高的一块装甲板
                     auto best_armor_it = std::max_element(
                         armor_model_->detectResults.begin(), armor_model_->detectResults.end(),
                         [](const Result& a, const Result& b) { return a.confidence < b.confidence; }
@@ -140,17 +134,20 @@ private:
                     cv::Rect num_roi = armor_rect_global & cv::Rect(0, 0, frame.cols, frame.rows);
                     if (num_roi.area() <= 0) continue;
                     
-                    // 数字分类识别
                     cv::Mat number_img = frame(num_roi);
                     float num_confidence = 0.0f;
                     int class_id = classifier_model_->Classify(number_img, num_confidence);
                     std::string label = (class_id >= 0 && class_id < classifier_labels_.size()) ? classifier_labels_[class_id] : "Unknown";
+                    if (label == "Unknown") class_id = -1; // -1 代表未知装甲板
                     
                     DetectObject obj;
                     obj.rect = armor_rect_global;
                     obj.label = label;
                     obj.type = ARMOR; 
-                    obj.confidence = armor_res.confidence;
+                    obj.class_id = class_id;              // 新增: 兵种 ID
+                    obj.class_conf = num_confidence;      // 新增: 分类概率
+                    obj.car_conf = robot_res.confidence;  // 新增: 车辆置信度
+                    obj.bot_id = -1;                      // 新增: 暂留空位
                     obj.center = cv::Point2f(armor_rect_global.x + armor_rect_global.width / 2.0f, armor_rect_global.y + armor_rect_global.height / 2.0f);
                     final_objects.push_back(obj);
                 }   
@@ -158,7 +155,7 @@ private:
         }
 
         // ==========================================
-        // 通道 2：空中目标 (飞机/无人机) 全图扫描
+        // 通道 2：空中目标 (无人机)
         // ==========================================
         if (plane_model_ && plane_model_->Detect(frame)) {
             for (const auto& plane_res : plane_model_->detectResults) {
@@ -167,9 +164,12 @@ private:
 
                 DetectObject obj;
                 obj.rect = plane_roi;
-                obj.label = "Drone"; // 固定标签向后传递
+                obj.label = "Drone"; 
                 obj.type = DRONE;    
-                obj.confidence = plane_res.confidence;
+                obj.class_id = -2;                    // 【关键】赋予 -2 ID，代表不需要 KF 的无人机
+                obj.class_conf = plane_res.confidence;// 暂以 YOLO 置信度替代
+                obj.car_conf = plane_res.confidence;  
+                obj.bot_id = -1;
                 obj.center = cv::Point2f(plane_roi.x + plane_roi.width / 2.0f, plane_roi.y + plane_roi.height / 2.0f);
                 final_objects.push_back(obj);
             }
@@ -185,8 +185,14 @@ private:
         for(const auto &obj : objects){
             radar_interfaces::msg::DetectResult res;
             res.number = obj.label; 
+            res.class_id = obj.class_id;         // 新增填装
+            res.class_conf = obj.class_conf;     // 新增填装
             res.x = obj.center.x; 
             res.y = obj.center.y;
+            res.width = obj.rect.width;          // 新增填装：框宽
+            res.height = obj.rect.height;        // 新增填装：框高
+            res.car_conf = obj.car_conf;         // 新增填装：车辆置信度
+            res.bot_id = obj.bot_id;             // 新增填装：底层ID
             results_msg.results.push_back(res);
         }
         pub_results_->publish(results_msg);
@@ -194,11 +200,9 @@ private:
 
     void publish_processed_video(cv::Mat& small_frame, const std::vector<DetectObject>& objects, const std_msgs::msg::Header& header)
     {
-        float scale = 1280.0f / 5472.0f; // 缩放系数匹配海康原图
+        float scale = 1280.0f / 5472.0f; 
         for(const auto &obj : objects){
             cv::Rect scaled_rect(obj.rect.x * scale, obj.rect.y * scale, obj.rect.width * scale, obj.rect.height * scale);
-            
-            // 颜色区分：无人机画橙色框，装甲板画绿色框
             cv::Scalar color = (obj.type == DRONE) ? cv::Scalar(0, 165, 255) : cv::Scalar(0, 255, 0);
             
             cv::rectangle(small_frame, scaled_rect, color, 2);
@@ -217,13 +221,11 @@ private:
         try {
             YAML::Node config = YAML::LoadFile(config_file_path_);
             
-            // 1. 加载地面系模型
             robot_model_ = std::make_unique<Model>(config["robot_modelpath"].as<std::string>(), config["robot_inputSize"].as<int>(), config["robot_scoreThresh"].as<float>(), config["robot_nmsThresh"].as<float>(), true);
             armor_model_ = std::make_unique<Model>(config["armor_modelpath"].as<std::string>(), config["armor_inputSize"].as<int>(), config["armor_scoreThresh"].as<float>(), config["armor_nmsThresh"].as<float>(), false);
             classifier_model_ = std::make_unique<Classifier>(config["classifier_modelpath"].as<std::string>(), config["classifier_inputSize"].as<int>());
             for (const auto &item : config["classifier_labels"]) classifier_labels_.push_back(item.second.as<std::string>());
             
-            // 2. 加载防空系模型 
             try {
                 if (config["plane_modelpath"]) {
                     plane_model_ = std::make_unique<Model>(
@@ -231,11 +233,11 @@ private:
                         config["plane_inputSize"].as<int>(), 
                         config["plane_scoreThresh"].as<float>(), 
                         config["plane_nmsThresh"].as<float>(), 
-                        true // 开启 FP16 TensorRT 加速
+                        true 
                     );
                 }
             } catch (const std::exception &e) {
-                RCLCPP_WARN(this->get_logger(), "未找到或无法加载防空网络模型(plane_modelpath): %s", e.what());
+                RCLCPP_WARN(this->get_logger(), "未找到或无法加载防空网络模型: %s", e.what());
             }
 
         } catch(const std::exception &e) { 

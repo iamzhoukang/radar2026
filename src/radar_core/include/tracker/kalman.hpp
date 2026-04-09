@@ -7,6 +7,7 @@ namespace tracker {
 
 // ==========================================
 // KalmanFilterBox - 8维状态：像素框 [cx, cy, w, h, vx, vy, vw, vh]
+// 使用固定大小矩阵，栈分配，无动态内存分配
 // ==========================================
 class KalmanFilterBox {
 public:
@@ -41,15 +42,15 @@ public:
      * 获取完整状态向量
      * @return [cx, cy, w, h, vx, vy, vw, vh]
      */
-    std::vector<float> get_state();
+    std::vector<float> get_state() const;
 
     // 状态向量: [cx, cy, w, h, vx, vy, vw, vh]
-    Eigen::VectorXf x;
-    Eigen::MatrixXf P;  // 误差协方差
-    Eigen::MatrixXf F;  // 状态转移矩阵
-    Eigen::MatrixXf H;  // 观测矩阵
-    Eigen::MatrixXf R;  // 测量噪声协方差
-    Eigen::MatrixXf Q;  // 过程噪声协方差
+    Eigen::Matrix<float, 8, 1> x;
+    Eigen::Matrix<float, 8, 8> P;  // 误差协方差
+    Eigen::Matrix<float, 8, 8> F;  // 状态转移矩阵
+    Eigen::Matrix<float, 4, 8> H;  // 观测矩阵 (4维观测)
+    Eigen::Matrix<float, 4, 4> R;  // 测量噪声协方差
+    Eigen::Matrix<float, 8, 8> Q;  // 过程噪声协方差
 
 private:
     float dt_, q_std_, r_std_;
@@ -58,6 +59,7 @@ private:
 
 // ==========================================
 // KalmanFilter2d - 4维状态：物理坐标 [x, y, vx, vy]
+// 使用固定大小矩阵，栈分配，无动态内存分配
 // ==========================================
 class KalmanFilter2d {
 public:
@@ -92,21 +94,21 @@ public:
      * 获取当前位置估计
      * @return [x, y]
      */
-    std::vector<float> get_position();
+    std::vector<float> get_position() const;
     
     /**
      * 获取当前速度估计
      * @return [vx, vy]
      */
-    std::vector<float> get_velocity();
+    std::vector<float> get_velocity() const;
 
     // 状态向量: [x, y, vx, vy]
-    Eigen::VectorXf x;
-    Eigen::MatrixXf P;
-    Eigen::MatrixXf F;
-    Eigen::MatrixXf H;
-    Eigen::MatrixXf R;
-    Eigen::MatrixXf Q;
+    Eigen::Matrix<float, 4, 1> x;
+    Eigen::Matrix<float, 4, 4> P;
+    Eigen::Matrix<float, 4, 4> F;
+    Eigen::Matrix<float, 2, 4> H;  // 观测矩阵 (2维观测)
+    Eigen::Matrix<float, 2, 2> R;
+    Eigen::Matrix<float, 4, 4> Q;
 
 private:
     float dt_, q_std_, r_std_;

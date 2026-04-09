@@ -70,6 +70,7 @@ add_library(tracker_lib
   src/tracker/hungarian.cpp
   src/tracker/kalman.cpp
   src/tracker/cascade_tracker.cpp
+  src/tracker/point_guesser.cpp
 )
 target_link_libraries(tracker_lib Eigen3::Eigen ${OpenCV_LIBS})
 

@@ -10,6 +10,9 @@
 namespace radar_core {
 namespace tracker {
 
+// 前向声明
+class PointGuesser;
+
 enum class TrackState { INACTIVE, TENTATIVE, CONFIRMED, LOST };
 
 // 对应 type.py -> SingleDetectionResult
@@ -54,6 +57,10 @@ struct TrackingState {
     cv::Point3f pos_3d;
     cv::Point2f pos_2d_uwb;      // 预测值（用于匹配）
     cv::Point2f pos_2d_uwb_det;  // 检测值
+    
+    // 【新增】猜点相关字段
+    cv::Point2f guess_point;      // 猜测点坐标
+    bool is_start_guess = false;  // 是否开始猜点
 
     KalmanFilterBox kalman_box;
     KalmanFilter2d kalman_2d;
@@ -65,12 +72,18 @@ struct TrackingState {
 // 对应 tracker.py -> CascadeMatchTracker
 class CascadeMatchTracker {
 public:
-    CascadeMatchTracker();
+    /**
+     * @param faction 阵营 ("red" 或 "blue")
+     * @param config_path 猜点配置文件路径（空则使用默认）
+     */
+    explicit CascadeMatchTracker(
+        const std::string& faction = "blue",
+        const std::string& guess_config_path = "");
 
     /**
      * 主追踪函数
      * @param detections 当前帧检测结果
-     * @param dt 时间步长（秒），建议传入实际帧间时间
+     * @param dt 时间步长（秒）
      */
     void track(const std::vector<SingleDetectionResult>& detections, float dt);
 
@@ -78,6 +91,7 @@ public:
     std::map<int, BotIdTrack> bot_id_trajectories;
 
 private:
+    // 港科大超级特调超参（与Python版对齐）
     const float W1 = 5.0f;   // 类别置信度权重
     const float W2 = 1.0f;   // IoU权重
     const float W4 = 0.4f;   // 3D距离权重
@@ -85,6 +99,9 @@ private:
     const float INACTIVE_COST_THRESHOLD = -1.0f;
     const int HIT_COUNT_THRESHOLD = 2;
     const int MISS_COUNT_THRESHOLD = 5;
+
+    std::string faction_;  // 【新增】阵营
+    std::unique_ptr<PointGuesser> point_guesser_;  // 【新增】猜点器
 
     float compute_score(TrackingState& track, const SingleDetectionResult& det);
     float compute_iou(const cv::Rect2f& a, const cv::Rect2f& b);

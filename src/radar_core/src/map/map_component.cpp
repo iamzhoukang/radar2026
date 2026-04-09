@@ -17,6 +17,7 @@
 #include "std_srvs/srv/trigger.hpp"
 
 #include "tracker/cascade_tracker.hpp"
+#include "tracker/point_guesser.hpp"
 
 namespace radar_core {
 
@@ -29,18 +30,26 @@ public:
         this->declare_parameter<std::string>("map_yaml", "/home/lzhros/Code/RadarStation/config/map/field_image.yaml");
         this->declare_parameter<std::string>("map_image", "/home/lzhros/Code/RadarStation/config/map/field_image.png");
         this->declare_parameter<std::string>("mesh_path", "/home/lzhros/Code/RadarStation/config/map/field_mesh.ply");
+        this->declare_parameter<std::string>("guess_config", "/home/lzhros/Code/RadarStation/config/map/guess_pts.yaml");
         this->declare_parameter<bool>("is_blue_team", true);
         
         camera_yaml_path_ = this->get_parameter("camera_yaml").as_string();
         map_yaml_path_ = this->get_parameter("map_yaml").as_string();
         map_image_path_ = this->get_parameter("map_image").as_string();
         mesh_path_ = this->get_parameter("mesh_path").as_string();
+        guess_config_path_ = this->get_parameter("guess_config").as_string();
         is_blue_team_ = this->get_parameter("is_blue_team").as_bool();
+        
+        // 【新增】初始化追踪器（传入阵营和猜点配置）
+        std::string faction = is_blue_team_ ? "blue" : "red";
+        hkust_tracker_ = std::make_unique<tracker::CascadeMatchTracker>(faction, guess_config_path_);
 
         if (!load_all_configs()) {
             RCLCPP_ERROR(this->get_logger(), "启动失败：参数文件、底图或 3D 网格加载错误！");
         } else {
-            RCLCPP_INFO(this->get_logger(), "\033[1;32m多模态小地图就绪！已挂载 HKUST 级联匹配追踪引擎 | 阵营: %s\033[0m", is_blue_team_ ? "蓝方" : "红方");
+            RCLCPP_INFO(this->get_logger(), "\033[1;32m多模态小地图就绪！已挂载 HKUST 级联匹配追踪引擎 | 阵营: %s | 猜点: %s\033[0m", 
+                is_blue_team_ ? "蓝方" : "红方", 
+                guess_config_path_.c_str());
         }
 
         sub_results_ = this->create_subscription<radar_interfaces::msg::DetectResults>(
@@ -82,8 +91,9 @@ private:
     utils::Raycaster raycaster_;
 
     // 【新增】港科大级联追踪引擎实例与时间戳
-    tracker::CascadeMatchTracker hkust_tracker_;
+    std::unique_ptr<tracker::CascadeMatchTracker> hkust_tracker_;
     std::chrono::steady_clock::time_point last_time_;
+    std::string guess_config_path_;
 
     void handle_reload(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
                        std::shared_ptr<std_srvs::srv::Trigger::Response> response)
@@ -181,12 +191,12 @@ private:
         // ==========================================
         // 🌟 一键呼叫港科大级联追踪引擎！
         // ==========================================
-        hkust_tracker_.track(hku_dets, dt);
+        hkust_tracker_->track(hku_dets, dt);
 
         // ==========================================
         // 提取极度平滑的坐标并发往串口
         // ==========================================
-        for (const auto& track : hkust_tracker_.tracks) {
+        for (const auto& track : hkust_tracker_->tracks) {
             if (track.is_active) {
                 char team;
                 int target_idx;

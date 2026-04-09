@@ -1,6 +1,8 @@
 #include "tracker/cascade_tracker.hpp"
+#include "tracker/point_guesser.hpp"
 #include <cmath>
 #include <algorithm>
+#include <iostream>
 
 namespace radar_core {
 namespace tracker {
@@ -64,17 +66,27 @@ void TrackingState::init(int cid, const std::string& n) {
     pos_3d = cv::Point3f(0, 0, 0);
     pos_2d_uwb = cv::Point2f(0, 0);
     pos_2d_uwb_det = cv::Point2f(0, 0);
-    // 使用合理的默认参数初始化卡尔曼滤波器
+    guess_point = cv::Point2f(0, 0);  // 【新增】
+    is_start_guess = false;            // 【新增】
     kalman_box = KalmanFilterBox(0.1f, 2.0f, 1.0f);
     kalman_2d = KalmanFilter2d(2.0f, 1.0f, 0.1f);
 }
 
-CascadeMatchTracker::CascadeMatchTracker() {
+CascadeMatchTracker::CascadeMatchTracker(
+    const std::string& faction,
+    const std::string& guess_config_path)
+    : faction_(faction) 
+{
     const std::vector<std::string> LABELS = {"B1", "B2", "B3", "B4", "B7", "R1", "R2", "R3", "R4", "R7"};
     tracks.resize(10);
     for (int i = 0; i < 10; ++i) {
         tracks[i].init(i, LABELS[i]);
     }
+    
+    // 【新增】初始化猜点器
+    point_guesser_ = std::make_unique<PointGuesser>(guess_config_path);
+    
+    std::cout << "[CascadeMatchTracker] 初始化完成，阵营: " << faction_ << std::endl;
 }
 
 float CascadeMatchTracker::compute_iou(const cv::Rect2f& a, const cv::Rect2f& b) {
@@ -95,26 +107,19 @@ float CascadeMatchTracker::compute_score(TrackingState& track, const SingleDetec
         score += std::max(-1.0f, 1.0f - pos3d_diff * W4);
         if (track.bot_id != -1 && track.bot_id == det.bot_id) score += 1.0f;
     } else {
-        // 【冷启动】：给予基础分，确保能开始匹配
         score += 0.5f;
     }
 
-    // 2. 身份置信度打分（关键修复）
+    // 2. 身份置信度打分
     if (det.bot_id != -1 && bot_id_trajectories.count(det.bot_id)) {
-        // 使用bot_id历史轨迹判断类别
         auto dist = bot_id_trajectories[det.bot_id].get_class_id_exponent_confidence();
         score += dist[track.class_id] * W1;
     } else {
-        // 直接对比兵种ID（主要修复点）
         if (det.class_id == track.class_id) {
-            // 类别完全匹配，给予高分
             score += det.class_conf * W1;
         } else if (det.class_id == -1) {
-            // 【修复】未知装甲板给予适中分数，允许匹配但分数较低
-            // 这样未知装甲板可以关联到任何track，但已知装甲板有优先权
-            score += 0.3f * W1;  // 0.3是未知装甲板的默认置信度
+            score += 0.3f * W1;
         }
-        // class_id不同的情况，不加分（避免错误匹配）
     }
 
     return score;
@@ -171,15 +176,13 @@ void CascadeMatchTracker::track(const std::vector<SingleDetectionResult>& detect
     // ==========================================
     int M = tracks.size(); 
     int N = detections.size();
-    std::vector<std::vector<float>> cost_matrix(M, std::vector<float>(N, 1e5f)); // 默认高代价
+    std::vector<std::vector<float>> cost_matrix(M, std::vector<float>(N, 1e5f));
 
     for (int i = 0; i < M; ++i) {
         for (int j = 0; j < N; ++j) {
             if (tracks[i].state == TrackState::INACTIVE) {
-                // 【冷启动】：计算匹配分数，但放宽距离限制
                 cost_matrix[i][j] = -1.0f * compute_score(tracks[i], detections[j]);
             } else {
-                // 【追踪中】：5K分辨率下的空间保护逻辑
                 float cx_t = tracks[i].car_box.x + tracks[i].car_box.width / 2.0f;
                 float cy_t = tracks[i].car_box.y + tracks[i].car_box.height / 2.0f;
                 float cx_d = detections[j].car_box.x + detections[j].car_box.width / 2.0f;
@@ -187,7 +190,7 @@ void CascadeMatchTracker::track(const std::vector<SingleDetectionResult>& detect
                 
                 float pixel_dist = std::hypot(cx_t - cx_d, cy_t - cy_d);
                 if (pixel_dist > 1500.0f) {
-                    cost_matrix[i][j] = 1e5; // 超过 1500 像素强制截断
+                    cost_matrix[i][j] = 1e5;
                 } else {
                     cost_matrix[i][j] = -1.0f * compute_score(tracks[i], detections[j]);
                 }
@@ -225,7 +228,6 @@ void CascadeMatchTracker::track(const std::vector<SingleDetectionResult>& detect
         auto& track = tracks[m.first];
         auto& det = detections[m.second];
         
-        // 将检测框转为center-based格式 [cx, cy, w, h]
         std::vector<float> det_xywh = {
             det.car_box.x + det.car_box.width/2.0f, 
             det.car_box.y + det.car_box.height/2.0f, 
@@ -234,23 +236,22 @@ void CascadeMatchTracker::track(const std::vector<SingleDetectionResult>& detect
         };
         std::vector<float> det_pos2d = {det.pos_3d.x, det.pos_3d.y};
 
-        // 死亡标记（class_id >= 10 表示死亡）
         if (det.class_id >= 10) track.is_dead = true;
 
         switch (track.state) {
             case TrackState::INACTIVE:
-                // 冷启动：转为TENTATIVE
                 track.state = TrackState::TENTATIVE;
-                track.hit_count = 1;  // 第一帧命中
+                track.hit_count = 1;
                 track.miss_count = 0;
                 track.bot_id = det.bot_id;
                 track.pos_3d = det.pos_3d;
                 track.pos_2d_uwb_det = cv::Point2f(det_pos2d[0], det_pos2d[1]);
-                // 初始化卡尔曼滤波器
                 track.kalman_box.reset(det_xywh);
                 track.kalman_2d.reset(det_pos2d);
-                // TENTATIVE期间不设置为active，等待确认
                 track.is_active = false;
+                // 【新增】重置猜点状态
+                track.is_start_guess = false;
+                track.guess_point = cv::Point2f(0, 0);
                 break;
                 
             case TrackState::TENTATIVE:
@@ -259,13 +260,10 @@ void CascadeMatchTracker::track(const std::vector<SingleDetectionResult>& detect
                 track.bot_id = det.bot_id;
                 track.pos_3d = det.pos_3d;
                 track.pos_2d_uwb_det = cv::Point2f(det_pos2d[0], det_pos2d[1]);
-                
-                // 更新卡尔曼滤波器
                 track.kalman_box.update(det_xywh);
                 track.kalman_2d.update(det_pos2d);
                 
                 if (track.hit_count >= HIT_COUNT_THRESHOLD) {
-                    // 转为CONFIRMED状态
                     track.state = TrackState::CONFIRMED;
                     track.is_active = true;
                 }
@@ -277,16 +275,11 @@ void CascadeMatchTracker::track(const std::vector<SingleDetectionResult>& detect
                 track.miss_count = 0;
                 track.is_active = true;
                 
-                // BotID跳变检测（如果bot_id变化了，可能是换人）
                 if (track.bot_id != -1 && track.bot_id != det.bot_id) {
-                    // BotID变化，重新初始化
                     track.kalman_box.reset(det_xywh);
                     track.kalman_2d.reset(det_pos2d);
                 } else {
-                    // 正常update
                     track.kalman_box.update(det_xywh);
-                    
-                    // 物理坐标防跳变（参考Python版OUTLIER_THRESHOLD=1.5m）
                     float d = std::hypot(
                         track.pos_2d_uwb.x - det_pos2d[0], 
                         track.pos_2d_uwb.y - det_pos2d[1]
@@ -300,15 +293,17 @@ void CascadeMatchTracker::track(const std::vector<SingleDetectionResult>& detect
                 track.pos_3d = det.pos_3d;
                 track.pos_2d_uwb_det = cv::Point2f(det_pos2d[0], det_pos2d[1]);
                 track.state = TrackState::CONFIRMED;
+                // 【新增】匹配成功后重置猜点状态
+                track.is_start_guess = false;
+                track.guess_point = cv::Point2f(0, 0);
                 break;
         }
         
-        // 更新car_box为当前检测值（用于可视化）
         track.car_box = det.car_box;
     }
 
     // ==========================================
-    // Step 6: 处理未匹配的轨迹
+    // Step 6: 处理未匹配的轨迹（含猜点逻辑）
     // ==========================================
     for (int i = 0; i < M; ++i) {
         if (track_matched[i]) continue;
@@ -332,31 +327,33 @@ void CascadeMatchTracker::track(const std::vector<SingleDetectionResult>& detect
             case TrackState::CONFIRMED:
                 track.state = TrackState::LOST;
                 track.miss_count = 1;
-                // LOST状态仍保持active，使用预测值
                 break;
                 
             case TrackState::LOST:
                 track.miss_count++;
                 if (track.miss_count >= MISS_COUNT_THRESHOLD) {
-                    // 丢失太久，重置为INACTIVE
+                    // 【新增】猜点逻辑
+                    if (!track.is_start_guess && point_guesser_) {
+                        auto guess = point_guesser_->predict_points(track, faction_);
+                        track.guess_point = cv::Point2f(guess[0], guess[1]);
+                        track.is_start_guess = true;
+                        
+                        // 用猜点更新卡尔曼滤波器，继续预测
+                        track.kalman_2d.update({guess[0], guess[1]});
+                        track.pos_2d_uwb = track.guess_point;
+                        
+                        // 猜点设置完成（静默）
+                    }
+                    
                     track.state = TrackState::INACTIVE;
                     track.is_active = false;
                     track.bot_id = -1;
                     track.hit_count = 0;
                     track.miss_count = 0;
-                    // 重置卡尔曼滤波器
-                    track.kalman_box.reset();
-                    track.kalman_2d.reset();
                 }
                 break;
         }
     }
-
-    // ==========================================
-    // Step 7: 处理未匹配的检测结果（可选：作为新轨迹）
-    // ==========================================
-    // 注意：当前实现中10个兵种是固定的，不需要创建新轨迹
-    // 但如果检测到未匹配的已知装甲板，可能需要考虑更换绑定
 }
 
 } // namespace tracker

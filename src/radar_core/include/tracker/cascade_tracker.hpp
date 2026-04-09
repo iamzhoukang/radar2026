@@ -78,7 +78,6 @@ public:
     std::map<int, BotIdTrack> bot_id_trajectories;
 
 private:
-    // 港科大超级特调超参（与Python版对齐）
     const float W1 = 5.0f;   // 类别置信度权重
     const float W2 = 1.0f;   // IoU权重
     const float W4 = 0.4f;   // 3D距离权重

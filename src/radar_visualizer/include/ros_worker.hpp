@@ -23,6 +23,7 @@ namespace radar_visualizer{
     public slots:
         void triggerCalibration();
         void toggleMapFlip();
+        void configOutpostROI();  // 【新增】配置前哨站ROI
 
     signals:// Qt 信号，专门向 UI 线程发送图像
         void videoReady(const QImage &img);
@@ -36,6 +37,7 @@ namespace radar_visualizer{
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_video_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_map_;
     rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr client_calib_;
+    rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr client_outpost_config_;  // 【新增】前哨站配置客户端
     
     std::atomic<bool> is_map_flipped_{false};
     };

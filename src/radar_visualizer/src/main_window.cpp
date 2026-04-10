@@ -85,9 +85,15 @@ void MainWindow::setupUi() {
     flip_btn_ = new QPushButton(" 翻转阵营", this);
     flip_btn_->setFixedHeight(50);
     flip_btn_->setStyleSheet("font-size: 16px; font-weight: bold; background-color: #f39c12; color: white; border-radius: 8px;");
+    
+    // 【新增】前哨站ROI配置按钮
+    outpost_config_btn_ = new QPushButton(" 配置前哨ROI", this);
+    outpost_config_btn_->setFixedHeight(50);
+    outpost_config_btn_->setStyleSheet("font-size: 16px; font-weight: bold; background-color: #9b59b6; color: white; border-radius: 8px;");
 
     btn_layout->addWidget(calib_btn_);
     btn_layout->addWidget(flip_btn_);
+    btn_layout->addWidget(outpost_config_btn_);
     right_layout->addLayout(btn_layout, 1);
 
     main_layout->addLayout(right_layout, 3);
@@ -98,6 +104,7 @@ void MainWindow::setupUi() {
     // 绑定按钮事件到自己的槽函数
     connect(calib_btn_, &QPushButton::clicked, this, &MainWindow::onCalibClicked);
     connect(flip_btn_, &QPushButton::clicked, this, &MainWindow::onFlipClicked);
+    connect(outpost_config_btn_, &QPushButton::clicked, this, &MainWindow::onOutpostConfigClicked);
 }
 
 void MainWindow::onCalibClicked() {
@@ -115,6 +122,18 @@ void MainWindow::onCalibClicked() {
 void MainWindow::onFlipClicked() {
     worker_->toggleMapFlip();
     // 可以在这里增加状态文字改变等 UI 效果
+}
+
+void MainWindow::onOutpostConfigClicked() {
+    worker_->configOutpostROI();
+    outpost_config_btn_->setText(" 配置中...");
+    outpost_config_btn_->setEnabled(false);
+    
+    // 5秒后恢复按钮状态（配置通常很快）
+    QTimer::singleShot(5000, [this](){
+        outpost_config_btn_->setText(" 配置前哨ROI");
+        outpost_config_btn_->setEnabled(true);
+    });
 }
 
 } // namespace radar_visualizer

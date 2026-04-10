@@ -16,6 +16,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RadarMap.msg"
   "msg/LidarCluster.msg"
   "msg/LidarClusterResults.msg"
+  "msg/SentryTactical.msg"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

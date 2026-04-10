@@ -3,32 +3,34 @@ robot_inputSize: 1280
 robot_scoreThresh: 0.45
 robot_nmsThresh: 0.35
 classNames:
-  0: "robot"
-
+  0: robot
 armor_modelpath: /home/lzhros/Code/RadarStation/model/engine/armor_little.engine
 armor_inputSize: 192
 armor_scoreThresh: 0.45
 armor_nmsThresh: 0.35
 classNames:
-  0: "armor"
-
+  0: armor
 plane_modelpath: /home/lzhros/Code/RadarStation/model/engine/plane_best.engine
 plane_inputSize: 640
 plane_scoreThresh: 0.45
 plane_nmsThresh: 0.35
 classNames:
-  0: "plane"
-
+  0: plane
 classifier_modelpath: /home/lzhros/Code/RadarStation/model/engine/armor_classifier.engine
 classifier_inputSize: 64
 classifier_labels:
-  0: "B1"
-  1: "B2"
-  2: "B3"
-  3: "B4"
-  4: "B7"
-  5: "R1"
-  6: "R2"
-  7: "R3" 
-  8: "R4"
-  9: "R7"
+  0: B1
+  1: B2
+  2: B3
+  3: B4
+  4: B7
+  5: R1
+  6: R2
+  7: R3
+  8: R4
+  9: R7
+outpost_roi:
+  - 1795
+  - 1393
+  - 205
+  - 123

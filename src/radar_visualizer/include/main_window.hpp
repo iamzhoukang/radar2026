@@ -44,6 +44,7 @@ private slots:
     // 按钮按下时的动画与状态锁定
     void onCalibClicked();
     void onFlipClicked();
+    void onOutpostConfigClicked();  // 【新增】前哨站ROI配置
 
 private:
     // 初始化 UI 布局
@@ -56,6 +57,7 @@ private:
     
     QPushButton* calib_btn_;
     QPushButton* flip_btn_;
+    QPushButton* outpost_config_btn_;  // 【新增】前哨站配置按钮
 };
 
 } // namespace radar_visualizer

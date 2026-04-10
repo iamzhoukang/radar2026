@@ -37,7 +37,7 @@ find_package(OpenCV REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(Open3D REQUIRED)
-find_package(Eigen3 REQUIRED) # 【新增】追踪器依赖
+find_package(Eigen3 REQUIRED) # 追踪器依赖
 
 # ==========================================
 # 3. 添加头文件路径
@@ -64,7 +64,7 @@ add_library(utils_lib
 )
 
 # ==========================================
-# 5. 编译追踪器库 (HKUST Cascade Tracker)
+# 5. 编译追踪器库 (HKUST Cascade Tracker & Point Guesser)
 # ==========================================
 add_library(tracker_lib
   src/tracker/hungarian.cpp
@@ -72,7 +72,7 @@ add_library(tracker_lib
   src/tracker/cascade_tracker.cpp
   src/tracker/point_guesser.cpp
 )
-target_link_libraries(tracker_lib Eigen3::Eigen ${OpenCV_LIBS})
+target_link_libraries(tracker_lib Eigen3::Eigen ${OpenCV_LIBS} yaml-cpp::yaml-cpp)
 
 # ==========================================
 # 6. 编译各个核心组件 (Component)
@@ -85,8 +85,11 @@ add_library(video_component SHARED src/camera/video_component.cpp)
 ament_target_dependencies(video_component rclcpp sensor_msgs cv_bridge rclcpp_components)
 
 # 神经网络检测组件
-add_library(netdetector_component SHARED src/detector/netdetector_component.cpp)
-ament_target_dependencies(netdetector_component rclcpp sensor_msgs cv_bridge radar_interfaces rclcpp_components)
+add_library(netdetector_component SHARED 
+  src/detector/netdetector_component.cpp
+  src/detector/outpost_config_ui.cpp
+)
+ament_target_dependencies(netdetector_component rclcpp sensor_msgs cv_bridge radar_interfaces rclcpp_components std_srvs)
 
 # PNP解算组件
 add_library(solvepnp_component SHARED 
@@ -111,12 +114,12 @@ target_link_libraries(camera_one_component ${OpenCV_LIBS} rb26SDK MvCameraContro
 
 target_link_libraries(video_component ${OpenCV_LIBS} pthread)
 
-# 【修正】为神经网络挂载 utils_lib 依赖
+# 为神经网络挂载 utils_lib 依赖
 target_link_libraries(netdetector_component utils_lib ${OpenCV_LIBS} ${TRT_LIB} yaml-cpp::yaml-cpp pthread)
 
 target_link_libraries(solvepnp_component ${OpenCV_LIBS} yaml-cpp::yaml-cpp)
 
-# 【修正】为地图挂载 tracker_lib 和 Eigen3 依赖
+# 为地图挂载 tracker_lib 和 Eigen3 依赖
 target_link_libraries(map_component ${OpenCV_LIBS} yaml-cpp::yaml-cpp pthread Open3D::Open3D tracker_lib Eigen3::Eigen)
 
 # ==========================================

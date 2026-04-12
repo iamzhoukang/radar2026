@@ -104,6 +104,7 @@ add_library(map_component SHARED
   src/map/map_component.cpp
   src/map/transform.cpp
   src/map/raycaster.cpp
+  src/map/map_tactical_analyzer.cpp
 )
 ament_target_dependencies(map_component rclcpp sensor_msgs cv_bridge radar_interfaces rclcpp_components std_srvs)
 

@@ -10,8 +10,8 @@ namespace radar_core{
 
             if(is_blue_team){
                 //蓝方视角
-                raw_x = mesh_pt.z + field_length / 2.0f;
-                raw_y = mesh_pt.x + field_width / 2.0f;
+                raw_x = 28.0 -( -mesh_pt.z + field_length / 2.0f);
+                raw_y = 15 - (-mesh_pt.x + field_width / 2.0f);
             }else{
                 //红方视角
                 raw_x = -mesh_pt.z + field_length / 2.0f;

@@ -32,7 +32,7 @@ def generate_launch_description():
         package='radar_core',
         plugin='radar_core::VideoComponent',
         name='video_test',
-        parameters=[{'video_path': '/home/lzhros/Code/vedio_cut/OneDrive_5_2025-10-25/7.27-南昌大学.mp4'}],
+        parameters=[{'video_path': '/home/lzhros/Code/RadarStation/video/output.mp4'}],
         extra_arguments=[{'use_intra_process_comms': True}],
         remappings=[('video_topic', 'cs200_topic')] 
     )

@@ -9,11 +9,13 @@
 
 #include "map/transform.hpp"
 #include "map/raycaster.hpp"
+#include "map/map_tactical_analyzer.hpp"  
 
 #include "radar_interfaces/msg/detect_results.hpp" 
 #include "radar_interfaces/msg/detect_result.hpp" 
 #include "radar_interfaces/msg/radar_map.hpp" 
 #include "radar_interfaces/msg/lidar_cluster_results.hpp" 
+#include "radar_interfaces/msg/sentry_tactical.hpp" 
 #include "std_srvs/srv/trigger.hpp"
 
 #include "tracker/cascade_tracker.hpp"
@@ -40,9 +42,12 @@ public:
         guess_config_path_ = this->get_parameter("guess_config").as_string();
         is_blue_team_ = this->get_parameter("is_blue_team").as_bool();
         
-        // 【新增】初始化追踪器（传入阵营和猜点配置）
+        // 初始化追踪器
         std::string faction = is_blue_team_ ? "blue" : "red";
         hkust_tracker_ = std::make_unique<tracker::CascadeMatchTracker>(faction, guess_config_path_);
+
+        // 初始化战术大脑
+        tactical_analyzer_ = std::make_unique<tactical::MapTacticalAnalyzer>();
 
         if (!load_all_configs()) {
             RCLCPP_ERROR(this->get_logger(), "启动失败：参数文件、底图或 3D 网格加载错误！");
@@ -50,6 +55,7 @@ public:
             RCLCPP_INFO(this->get_logger(), "\033[1;32m多模态小地图就绪！已挂载 HKUST 级联匹配追踪引擎 | 阵营: %s | 猜点: %s\033[0m", 
                 is_blue_team_ ? "蓝方" : "红方", 
                 guess_config_path_.c_str());
+            RCLCPP_INFO(this->get_logger(), "\033[1;34m[Tactical] Map端战术空间分析器已挂载完毕！\033[0m");
         }
 
         sub_results_ = this->create_subscription<radar_interfaces::msg::DetectResults>(
@@ -62,8 +68,20 @@ public:
             std::bind(&MapComponent::radar_callback, this, std::placeholders::_1)
         );
 
+        // 新增：跨节点监听视觉端传来的前哨站状态
+        sub_detector_tactical_ = this->create_subscription<radar_interfaces::msg::SentryTactical>(
+            "detector/tactical_info", 10,
+            [this](const radar_interfaces::msg::SentryTactical::SharedPtr msg) {
+                this->current_outpost_alive_ = msg->outpost_alive;
+            }
+        );
+
         pub_map_img_ = this->create_publisher<sensor_msgs::msg::Image>("map/image", 10);
         pub_official_ = this->create_publisher<radar_interfaces::msg::RadarMap>("map/official_data", 10);
+        
+        // 向外发布纯净的完整战术空间情报
+        pub_tactical_ = this->create_publisher<radar_interfaces::msg::SentryTactical>("map/tactical_info", 10);
+
         srv_reload_ = this->create_service<std_srvs::srv::Trigger>(
             "map/reload_config",
             std::bind(&MapComponent::handle_reload, this, std::placeholders::_1, std::placeholders::_2)
@@ -78,20 +96,26 @@ private:
     
     rclcpp::Subscription<radar_interfaces::msg::DetectResults>::SharedPtr sub_results_;
     rclcpp::Subscription<radar_interfaces::msg::LidarClusterResults>::SharedPtr sub_radar_; 
+    rclcpp::Subscription<radar_interfaces::msg::SentryTactical>::SharedPtr sub_detector_tactical_; // 新增订阅器
     radar_interfaces::msg::LidarClusterResults::SharedPtr latest_radar_msg_;              
 
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_map_img_;
     rclcpp::Publisher<radar_interfaces::msg::RadarMap>::SharedPtr pub_official_;
+    rclcpp::Publisher<radar_interfaces::msg::SentryTactical>::SharedPtr pub_tactical_; 
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_reload_;
 
     cv::Mat K_, D_, R_inv_, T_, base_map_, rvec_; 
     float field_length_ = 28.0f, field_width_ = 15.0f;
     int map_w_ = 772, map_h_ = 388;
+    
+    int current_outpost_alive_ = 1; // 新增：缓存视觉端发来的前哨站状态（默认存活）
 
     utils::Raycaster raycaster_;
 
-    // 【新增】港科大级联追踪引擎实例与时间戳
+    // 追踪引擎与战术引擎
     std::unique_ptr<tracker::CascadeMatchTracker> hkust_tracker_;
+    std::unique_ptr<tactical::MapTacticalAnalyzer> tactical_analyzer_;
+    
     std::chrono::steady_clock::time_point last_time_;
     std::string guess_config_path_;
 
@@ -117,10 +141,10 @@ private:
     {
         if (K_.empty() || base_map_.empty()) return;
 
-        // 计算时间差 (dt)，用于卡尔曼滤波器的速度推算
+        // 计算时间差 dt，用于卡尔曼滤波
         auto current_time = std::chrono::steady_clock::now();
         float dt = std::chrono::duration<float>(current_time - last_time_).count();
-        if (dt > 1.0f || dt <= 0.0f) dt = 0.1f; // 保护机制，防止首帧 dt 过大
+        if (dt > 1.0f || dt <= 0.0f) dt = 0.1f; 
         last_time_ = current_time;
 
         cv::Mat draw_map = base_map_.clone();
@@ -130,9 +154,7 @@ private:
         std::vector<tracker::SingleDetectionResult> hku_dets;
 
         for (const auto& res : msg->results) {
-            // ==========================================
             // 【免检通道】无人机专属 3D 雷达投影逻辑
-            // ==========================================
             if (res.class_id == -2 || res.number == "Drone") {
                 if (!latest_radar_msg_ || latest_radar_msg_->clusters.empty()) continue; 
 
@@ -165,15 +187,11 @@ private:
                     int py = (int)((1.0f - off_pt.y / field_width_) * map_h_);
                     draw_on_map(draw_map, px, py, "Drone");
                 }
-                continue; // 无人机不进追踪器，直接跳过后续处理！
+                continue; // 无人机不进追踪器
             }
 
-            // ==========================================
             // 【地面通道】光线追踪解算并装填给 HKUST Tracker
-            // ==========================================
             cv::Point3f mesh_pt = raycaster_.pixelToWorld(cv::Point2f(res.x, res.y), K_, D_, R_inv_, T_);
-            
-            // 将 mesh 坐标立刻转为裁判系统绝对场地坐标 (UWB 坐标)
             cv::Point2f official_pt = utils::convertToOfficialMap(mesh_pt, field_length_, field_width_, is_blue_team_);
 
             tracker::SingleDetectionResult det;
@@ -181,31 +199,30 @@ private:
             det.class_conf = res.class_conf;
             det.car_box = cv::Rect2f(res.x - res.width/2.0f, res.y - res.height/2.0f, res.width, res.height);
             det.car_conf = res.car_conf;
-            // 将场地绝对坐标装填给 Tracker，便于它算物理运动的 Kalman
             det.pos_3d = cv::Point3f(official_pt.x, official_pt.y, 0.0f); 
             det.bot_id = res.bot_id;
 
             hku_dets.push_back(det);
         }
 
-        // ==========================================
-        // 🌟 一键呼叫港科大级联追踪引擎！
-        // ==========================================
+        // 一键呼叫港科大级联追踪引擎！
         hkust_tracker_->track(hku_dets, dt);
 
         // ==========================================
-        // 提取极度平滑的坐标并发往串口
+        // 提取平滑坐标，进行战术评估与串口数据装填
         // ==========================================
+        std::vector<tactical::TrackedTarget> active_targets;
+
         for (const auto& track : hkust_tracker_->tracks) {
             if (track.is_active) {
                 char team;
                 int target_idx;
                 if (utils::parseTargetLabel(track.name, team, target_idx)) {
                     
-                    // 获取 KF 平滑、抗抖动后的 2D 绝对坐标
                     float smooth_x = track.pos_2d_uwb.x;
                     float smooth_y = track.pos_2d_uwb.y;
 
+                    // 装填裁判系统地图数据
                     if (team == 'B' || team == 'b') {
                         official_msg.blue_x[target_idx] = smooth_x;
                         official_msg.blue_y[target_idx] = smooth_y;
@@ -214,7 +231,10 @@ private:
                         official_msg.red_y[target_idx] = smooth_y;
                     }
 
-                    // 绘制平滑后的小地图像素位置
+                    // 装填给战术大脑的稳定目标列表
+                    active_targets.push_back({team, target_idx, smooth_x, smooth_y});
+
+                    // 绘制小地图
                     int px = (int)((smooth_x / field_length_) * map_w_);
                     int py = (int)((1.0f - smooth_y / field_width_) * map_h_);
                     draw_on_map(draw_map, px, py, track.name); 
@@ -222,6 +242,22 @@ private:
             }
         }
 
+        // 执行战术空间评估
+        tactical_analyzer_->evaluate(active_targets, is_blue_team_);
+
+        //  组装战术消息并发布
+        radar_interfaces::msg::SentryTactical tactical_msg;
+        tactical_msg.header = msg->header;
+        
+        //填入从视觉节点订阅到的真实前哨站状态！
+        tactical_msg.outpost_alive = current_outpost_alive_;
+        
+        tactical_msg.engineer_on_island = tactical_analyzer_->get_engineer_on_island();
+        tactical_msg.enemy_massive_attack = tactical_analyzer_->get_enemy_massive_attack();
+        tactical_msg.ally_massive_attack = tactical_analyzer_->get_ally_massive_attack();
+        pub_tactical_->publish(tactical_msg);
+
+        // 发布裁判系统串口数据与地图图像
         pub_official_->publish(official_msg);
         
         cv::Mat vertical_map;

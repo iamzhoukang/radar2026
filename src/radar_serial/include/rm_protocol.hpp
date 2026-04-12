@@ -5,7 +5,7 @@
 #include <vector>
 #include <cstring>
 
-namespace radar_core {
+namespace radar_serial {
 
 constexpr uint8_t RM_SOF = 0xA5;
 
@@ -52,11 +52,13 @@ struct __attribute__((packed)) map_robot_data_t {
 };
 
 // =========================================================================
-// 0x020E 雷达场地状态同步 (裁判系统 -> 雷达)
+// 下行 0x020E 雷达状态与双倍易伤
 // =========================================================================
 struct __attribute__((packed)) radar_info_t {
-    uint8_t info_byte; 
-    uint8_t get_double_damage_chance() const { return info_byte & 0x03; }
+    uint8_t radar_info;
+    uint8_t get_double_damage_chance() const {
+        return (radar_info & 0x03); 
+    }
 };
 
 // =========================================================================
@@ -64,6 +66,9 @@ struct __attribute__((packed)) radar_info_t {
 // =========================================================================
 constexpr uint16_t SUBCMD_ID_RADAR_DECISION = 0x0121;
 constexpr uint16_t SERVER_ID = 0x8080;
+
+// 🌟 新增：雷达 -> 哨兵/飞镖 战术信息 (子内容ID: 0x0200)
+constexpr uint16_t SUBCMD_ID_SENTRY_TACTICAL = 0x0200;
 
 struct __attribute__((packed)) interaction_header_t {
     uint16_t data_cmd_id; 
@@ -82,8 +87,22 @@ struct __attribute__((packed)) radar_double_damage_packet_t {
     radar_decision_t body;
 };
 
+// 🌟 新增：战术数据载荷 
+struct __attribute__((packed)) sentry_tactical_data_t {
+    int32_t outpost_alive;
+    int32_t engineer_on_island;
+    int32_t enemy_massive_attack;
+    int32_t ally_massive_attack;
+};
+
+// 🌟 新增：雷达->外部终端(哨兵/飞镖) 交互数据包
+struct __attribute__((packed)) radar_to_sentry_packet_t {
+    interaction_header_t header;
+    sentry_tactical_data_t body;
+};
+
 // =========================================================================
-// 官方 CRC 校验算法
+// 官方 CRC 校验算法 (Inline 防止重复定义)
 // =========================================================================
 const uint8_t CRC8_INIT = 0xff;
 const uint8_t CRC8_TAB[256] = {
@@ -189,6 +208,6 @@ inline void Append_CRC16_Check_Sum(uint8_t* pchMessage, uint32_t dwLength) {
     pchMessage[dwLength - 1] = (uint8_t)((wCRC >> 8) & 0x00ff);
 }
 
-} // namespace radar_core
+} // namespace radar_serial
 
 #endif // RM_PROTOCOL_HPP

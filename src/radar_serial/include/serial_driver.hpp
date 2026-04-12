@@ -15,7 +15,7 @@
 
 #include "rm_protocol.hpp"
 
-namespace radar_core {
+namespace radar_serial {
 
 class SerialDriver {
 public:
@@ -158,6 +158,6 @@ private:
     }
 };
 
-} // namespace radar_core
+} // namespace radar_serial
 
 #endif // SERIAL_DRIVER_HPP

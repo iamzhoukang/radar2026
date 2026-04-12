@@ -79,7 +79,7 @@ private:
     int outpost_miss_count_ = 0;
     bool is_outpost_alive_ = true;
     const int OUTPOST_MISS_THRESHOLD = 20;
-    const int OUTPOST_WARMUP_SECONDS = 60; // 恢复为开局前 60 秒免检保护
+    const int OUTPOST_WARMUP_SECONDS = 120; //   开局前 120 秒免检保护
     std::chrono::steady_clock::time_point system_start_time_;
     
     // 【热配置】ROI配置相关

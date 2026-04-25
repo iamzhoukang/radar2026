@@ -52,7 +52,7 @@ public:
         if (!load_all_configs()) {
             RCLCPP_ERROR(this->get_logger(), "启动失败：参数文件、底图或 3D 网格加载错误！");
         } else {
-            RCLCPP_INFO(this->get_logger(), "\033[1;32m多模态小地图就绪！已挂载 HKUST 级联匹配追踪引擎 | 阵营: %s | 猜点: %s\033[0m", 
+            RCLCPP_INFO(this->get_logger(), "\033[1;32m多模态小地图就绪！ 阵营: %s | 猜点: %s\033[0m", 
                 is_blue_team_ ? "蓝方" : "红方", 
                 guess_config_path_.c_str());
             RCLCPP_INFO(this->get_logger(), "\033[1;34m[Tactical] Map端战术空间分析器已挂载完毕！\033[0m");
@@ -108,7 +108,7 @@ private:
     float field_length_ = 28.0f, field_width_ = 15.0f;
     int map_w_ = 772, map_h_ = 388;
     
-    int current_outpost_alive_ = 1; // 新增：缓存视觉端发来的前哨站状态（默认存活）
+    int current_outpost_alive_ = 1; 
 
     utils::Raycaster raycaster_;
 
@@ -205,7 +205,6 @@ private:
             hku_dets.push_back(det);
         }
 
-        // 一键呼叫港科大级联追踪引擎！
         hkust_tracker_->track(hku_dets, dt);
 
         // ==========================================

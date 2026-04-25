@@ -27,7 +27,7 @@ namespace radar_core{
 
         bool parseTargetLabel(const std::string& label, char& team, int& target_idx)
         {
-            // 【新增】无人机专属身份解析
+            // 无人机专属身份解析
             if (label == "Drone") {
                 team = 'A'; // 'A' 代表 All, 双方阵营均可渲染
                 target_idx = 4; // 专门留出的空位 (原本 1234对应0123, 7对应5)

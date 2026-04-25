@@ -172,7 +172,7 @@ def generate_launch_description():
         name='radar_module_vision_container',
         namespace='',
         package='rclcpp_components',
-        executable='component_container', 
+        executable='component_container_mt',
         composable_node_descriptions=[camera_two_node, pose_detector_node],
         output='screen',
     )

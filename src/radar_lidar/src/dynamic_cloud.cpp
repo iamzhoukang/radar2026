@@ -3,7 +3,7 @@
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/crop_box.h>
-#include <pcl/common/transforms.h> // 【新增】用于执行空间变换
+#include <pcl/common/transforms.h> 
 #include <omp.h> // 多线程加速
 
 namespace radar_lidar {
@@ -92,7 +92,7 @@ void DynamicCloud::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr 
     pcl::transformPointCloud(*raw_cloud, *aligned_cloud, transform_matrix);
 
     // ==========================================
-    // 🔪 性能优化 1：ROI 裁剪 (基于变换后的绝对坐标)
+    // 性能优化 1：ROI 裁剪 (基于变换后的绝对坐标)
     // ==========================================
     pcl::PointCloud<pcl::PointXYZ>::Ptr cropped_cloud(new pcl::PointCloud<pcl::PointXYZ>());
     pcl::CropBox<pcl::PointXYZ> box_filter;
@@ -103,7 +103,7 @@ void DynamicCloud::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr 
     box_filter.filter(*cropped_cloud);
 
     // ==========================================
-    // 📉 性能优化 2：体素降采样
+    //  性能优化 2：体素降采样
     // ==========================================
     pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZ>());
     pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
@@ -116,7 +116,7 @@ void DynamicCloud::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr 
     std::vector<int> is_dynamic(downsampled_cloud->points.size(), 0);
 
     // ==========================================
-    // ⚡ 性能优化 3：OpenMP 多核并发背景扣除
+    //  性能优化 3：OpenMP 多核并发背景扣除
     // ==========================================
     #pragma omp parallel for
     for (size_t i = 0; i < downsampled_cloud->points.size(); ++i) {

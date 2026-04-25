@@ -29,7 +29,6 @@ public:
         
         is_red_side_ = !is_blue_team; 
         
-        // 🌟 确定红蓝方的各个终端 ID
         my_robot_id_      = is_red_side_ ? 9 : 109;       // 雷达 ID
         target_sentry_id_ = is_red_side_ ? 7 : 107;       // 哨兵 ID
         target_dart_id_   = is_red_side_ ? 8 : 108;       // 飞镖 ID
@@ -148,7 +147,7 @@ private:
     }
 
     // =========================================================
-    // 🌟 任务 B：稳定 2Hz 发送 0x0301 战术情报给【哨兵】与【飞镖】
+    // 任务 B：稳定 2Hz 发送 0x0301 战术情报给【哨兵】与【飞镖】
     // =========================================================
     void onTimerTactical()
     {

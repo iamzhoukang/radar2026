@@ -31,6 +31,6 @@ classifier_labels:
   9: R7
 outpost_roi:
   - 1795
-  - 1393
+  - 1355
   - 205
-  - 123
+  - 183

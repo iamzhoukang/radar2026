@@ -8,10 +8,9 @@
 //哈基旭师兄开发的海康sdk
 #include "rb26SDK/include/CamreaExmple.hpp"
 
-namespace radar_core
-{
+namespace radar_core{
 
-class CameraOneComponent : public rclcpp::Node
+class CameraTwoComponent : public rclcpp::Node
 {
     private:
         rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_;
@@ -22,11 +21,11 @@ class CameraOneComponent : public rclcpp::Node
         std::atomic<bool> is_running_;
 
         void captureLoop()
-        {   
-            //只要 ROS 正常运行且标志位为 true，就持续死循环取流
+        {
+             //只要 ROS 正常运行且标志位为 true，就持续死循环取流
             while(rclcpp::ok() && is_running_)
             {   
-                cv::Mat frame = cap_.getFrame(0,0);
+                cv::Mat frame = cap_.getFrame(1,1);
                 if(frame.empty()) {
                 // 如果没取到，短暂休眠让出 CPU 时间片，防止死锁空转
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -39,7 +38,7 @@ class CameraOneComponent : public rclcpp::Node
 
                 //填充消息头
                 msg->header.stamp = this->now();
-                msg->header.frame_id = "cs200_frame";
+                msg->header.frame_id = "cs016_frame";
 
                 //将 cv::Mat 的数据高效拷贝到 msg 中
                 // 注意：这里重载的 toImageMsg 传入的是对象的引用 (*msg)，避免了创建额外的 shared_ptr
@@ -52,39 +51,38 @@ class CameraOneComponent : public rclcpp::Node
         }
 
     public:
-        //组件化构造函数必须接受 rclcpp::NodeOptions
-        explicit CameraOneComponent(const rclcpp::NodeOptions & options)
-        :Node("camera_one_node", options),is_running_(false)
+        explicit CameraTwoComponent(const rclcpp::NodeOptions& options)
+        :Node("camera_two_node", options),is_running_(false)
         {
             //初始化相机
             sdk::CameraExmple<sdk::HikCamera>::CameraSDKInit();
-            const char* sn = "DA7831910";
-            if(!cap_.CameraInit(const_cast<char *>(sn), true, 5000, 0.7, 0.3)) {
-            RCLCPP_ERROR(this->get_logger(), "相机一初始化失败！");
+            const char* sn = "DA9784621";
+            if(!cap_.CameraInit(const_cast<char *>(sn), true, 2000, 0.7, 0.3)) {
+            RCLCPP_ERROR(this->get_logger(), "相机二初始化失败！");
             return;
             }
 
-            //创建发布者
-            pub_ = this->create_publisher<sensor_msgs::msg::Image>("cs200_topic",10);
+            pub_ =  this->create_publisher<sensor_msgs::msg::Image>("cs016_topic", 10);
 
             //启动取流线程
             is_running_ = true;
-            capture_thread_ = std::thread(&CameraOneComponent::captureLoop, this);
-            RCLCPP_INFO(this->get_logger(), "相机一采集子线程已启动，等待图像...");
+            capture_thread_ = std::thread(&CameraTwoComponent::captureLoop, this);
+            RCLCPP_INFO(this->get_logger(), "相机二采集子线程已启动，等待图像...");
+            
         }
 
-    ~CameraOneComponent() 
-    {
+         ~CameraTwoComponent() 
+        {
         is_running_ = false;
         if(capture_thread_.joinable()) {
             capture_thread_.join();
         }
         RCLCPP_INFO(this->get_logger(), "相机采集子线程已安全关闭。");
-    }
+        }
+
 };
 
-}//namespace radar_core
-
+}
 //注册组件宏，这是 Launch 文件能找到它的唯一凭证
 #include "rclcpp_components/register_node_macro.hpp"
-RCLCPP_COMPONENTS_REGISTER_NODE(radar_core::CameraOneComponent)
+RCLCPP_COMPONENTS_REGISTER_NODE(radar_core::CameraTwoComponent)

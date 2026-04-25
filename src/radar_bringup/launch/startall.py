@@ -20,12 +20,12 @@ def generate_launch_description():
     is_blue_team = LaunchConfiguration('is_blue_team')
 
     lab_mode_arg = DeclareLaunchArgument(
-        'lab_mode', default_value='true', description='开启实验室模式(跳过雷达建图对齐)'
+        'lab_mode', default_value='false', description='开启实验室模式(跳过雷达建图对齐)'
     )
     lab_mode = LaunchConfiguration('lab_mode')
 
     # ==========================================
-    # 1. 视觉管线节点 (纯视觉处理)
+    # 1. 主视觉管线节点 (主相机/普通装甲板识别)
     # ==========================================
     video_node = ComposableNode(
         condition=IfCondition(use_video),
@@ -80,7 +80,24 @@ def generate_launch_description():
     )
 
     # ==========================================
-    # 2. 雷达管线节点 (点云处理与防空感知)
+    # 2. 防空视觉管线节点 (独立相机/Pose解算)
+    # ==========================================
+    camera_two_node = ComposableNode(
+        package='radar_core',
+        plugin='radar_core::CameraTwoComponent',
+        name='camera_two_component',
+        extra_arguments=[{'use_intra_process_comms': True}]  # 开启内部零拷贝
+    )
+
+    pose_detector_node = ComposableNode(
+        package='radar_core',
+        plugin='radar_core::PoseDetectorComponent',
+        name='pose_detector_component',
+        extra_arguments=[{'use_intra_process_comms': True}]  # 开启内部零拷贝
+    )
+
+    # ==========================================
+    # 3. 雷达管线节点 (点云处理与防空感知)
     # ==========================================
     localization_node = ComposableNode(
         package='radar_lidar',
@@ -119,7 +136,7 @@ def generate_launch_description():
     )
 
     # ==========================================
-    # 3. 独立外设节点
+    # 4. 独立外设节点
     # ==========================================
     visualizer_standalone_node = Node(
         package='radar_visualizer',
@@ -137,9 +154,10 @@ def generate_launch_description():
     )
 
     # ==========================================
-    # 4. 双核心装配
+    # 5. 三核心
     # ==========================================
-    # 视觉大脑：单线程，保证图像流不被打断
+    
+    #  视觉 1：负责主相机、普通自瞄和雷达地图
     vision_container = ComposableNodeContainer(
         name='radar_vision_container',
         namespace='',
@@ -149,7 +167,17 @@ def generate_launch_description():
         output='screen',
     )
 
-    # 雷达大脑：多线程 (component_container_mt)，榨干 CPU 算力处理数十万点云
+    #  视觉 2：防空模块专属！独立进程，不抢占主相机算力
+    module_vision_container = ComposableNodeContainer(
+        name='radar_module_vision_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container', 
+        composable_node_descriptions=[camera_two_node, pose_detector_node],
+        output='screen',
+    )
+
+    #  雷达：多线程 (component_container_mt)，榨干 CPU 算力处理数十万点云
     lidar_container = ComposableNodeContainer(
         name='radar_lidar_container',
         namespace='',
@@ -161,6 +189,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         use_video_arg, is_blue_team_arg, lab_mode_arg,
-        vision_container, lidar_container,
+        vision_container, module_vision_container, lidar_container,
         visualizer_standalone_node, serial_standalone_node  
     ])

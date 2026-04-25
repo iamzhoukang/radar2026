@@ -81,6 +81,9 @@ target_link_libraries(tracker_lib Eigen3::Eigen ${OpenCV_LIBS} yaml-cpp::yaml-cp
 add_library(camera_one_component SHARED src/camera/cameraone_component.cpp)
 ament_target_dependencies(camera_one_component rclcpp sensor_msgs cv_bridge rclcpp_components)
 
+add_library(camera_two_component SHARED src/camera/cameratwo_component.cpp)
+ament_target_dependencies(camera_two_component rclcpp sensor_msgs cv_bridge rclcpp_components)
+
 add_library(video_component SHARED src/camera/video_component.cpp)
 ament_target_dependencies(video_component rclcpp sensor_msgs cv_bridge rclcpp_components)
 
@@ -90,6 +93,13 @@ add_library(netdetector_component SHARED
   src/detector/outpost_config_ui.cpp
 )
 ament_target_dependencies(netdetector_component rclcpp sensor_msgs cv_bridge radar_interfaces rclcpp_components std_srvs)
+
+# 姿态检测组件 (PoseDetector)
+add_library(posedetector_component SHARED 
+  src/detector/posedetector_component.cpp
+  src/utils/pose.cpp
+)
+ament_target_dependencies(posedetector_component rclcpp sensor_msgs cv_bridge geometry_msgs rclcpp_components)
 
 # PNP解算组件
 add_library(solvepnp_component SHARED 
@@ -113,10 +123,15 @@ ament_target_dependencies(map_component rclcpp sensor_msgs cv_bridge radar_inter
 # ==========================================
 target_link_libraries(camera_one_component ${OpenCV_LIBS} rb26SDK MvCameraControl dl pthread)
 
+target_link_libraries(camera_two_component ${OpenCV_LIBS} rb26SDK MvCameraControl dl pthread)
+
 target_link_libraries(video_component ${OpenCV_LIBS} pthread)
 
 # 为神经网络挂载 utils_lib 依赖
 target_link_libraries(netdetector_component utils_lib ${OpenCV_LIBS} ${TRT_LIB} yaml-cpp::yaml-cpp pthread)
+
+# 为姿态检测组件链接 TensorRT、CUDA、OpenCV 和 yaml-cpp
+target_link_libraries(posedetector_component utils_lib ${OpenCV_LIBS} ${TRT_LIB} yaml-cpp::yaml-cpp cudart pthread)
 
 target_link_libraries(solvepnp_component ${OpenCV_LIBS} yaml-cpp::yaml-cpp)
 
@@ -127,8 +142,10 @@ target_link_libraries(map_component ${OpenCV_LIBS} yaml-cpp::yaml-cpp pthread Op
 # 8. 注册组件 (向 ROS2 容器暴露接口)
 # ==========================================
 rclcpp_components_register_nodes(camera_one_component "radar_core::CameraOneComponent")
+rclcpp_components_register_nodes(camera_two_component "radar_core::CameraTwoComponent")
 rclcpp_components_register_nodes(video_component "radar_core::VideoComponent")
 rclcpp_components_register_nodes(netdetector_component "radar_core::NetDetectorComponent")
+rclcpp_components_register_nodes(posedetector_component "radar_core::PoseDetectorComponent")
 rclcpp_components_register_nodes(solvepnp_component "radar_core::SolvePnPComponent")
 rclcpp_components_register_nodes(map_component "radar_core::MapComponent")
 
@@ -139,8 +156,10 @@ install(TARGETS
   utils_lib 
   tracker_lib 
   camera_one_component 
+  camera_two_component
   video_component 
   netdetector_component 
+  posedetector_component
   solvepnp_component 
   map_component
   ARCHIVE DESTINATION lib

@@ -80,24 +80,7 @@ def generate_launch_description():
     )
 
     # ==========================================
-    # 2. 防空视觉管线节点 (独立相机/Pose解算)
-    # ==========================================
-    camera_two_node = ComposableNode(
-        package='radar_core',
-        plugin='radar_core::CameraTwoComponent',
-        name='camera_two_component',
-        extra_arguments=[{'use_intra_process_comms': True}]  # 开启内部零拷贝
-    )
-
-    pose_detector_node = ComposableNode(
-        package='radar_core',
-        plugin='radar_core::PoseDetectorComponent',
-        name='pose_detector_component',
-        extra_arguments=[{'use_intra_process_comms': True}]  # 开启内部零拷贝
-    )
-
-    # ==========================================
-    # 3. 雷达管线节点 (点云处理与防空感知)
+    # 2. 雷达管线节点 (点云处理与防空感知)
     # ==========================================
     localization_node = ComposableNode(
         package='radar_lidar',
@@ -167,16 +150,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    #  视觉 2：防空模块专属！独立进程，不抢占主相机算力
-    module_vision_container = ComposableNodeContainer(
-        name='radar_module_vision_container',
-        namespace='',
-        package='rclcpp_components',
-        executable='component_container_mt',
-        composable_node_descriptions=[camera_two_node, pose_detector_node],
-        output='screen',
-    )
-
     #  雷达：多线程 (component_container_mt)，榨干 CPU 算力处理数十万点云
     lidar_container = ComposableNodeContainer(
         name='radar_lidar_container',
@@ -189,6 +162,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         use_video_arg, is_blue_team_arg, lab_mode_arg,
-        vision_container, module_vision_container, lidar_container,
+        vision_container, lidar_container,
         visualizer_standalone_node, serial_standalone_node  
     ])

@@ -67,7 +67,7 @@ struct __attribute__((packed)) radar_info_t {
 constexpr uint16_t SUBCMD_ID_RADAR_DECISION = 0x0121;
 constexpr uint16_t SERVER_ID = 0x8080;
 
-// 🌟 新增：雷达 -> 哨兵/飞镖 战术信息 (子内容ID: 0x0200)
+//  新增：雷达 -> 哨兵/飞镖 战术信息 (子内容ID: 0x0200)
 constexpr uint16_t SUBCMD_ID_SENTRY_TACTICAL = 0x0200;
 
 struct __attribute__((packed)) interaction_header_t {
@@ -87,15 +87,15 @@ struct __attribute__((packed)) radar_double_damage_packet_t {
     radar_decision_t body;
 };
 
-// 🌟 新增：战术数据载荷 
+// 新增：战术数据载荷 
 struct __attribute__((packed)) sentry_tactical_data_t {
-    int32_t outpost_alive;
-    int32_t engineer_on_island;
-    int32_t enemy_massive_attack;
-    int32_t ally_massive_attack;
+    uint8_t outpost_alive;
+    uint8_t engineer_on_island;
+    uint8_t enemy_massive_attack;
+    uint8_t ally_massive_attack;
 };
 
-// 🌟 新增：雷达->外部终端(哨兵/飞镖) 交互数据包
+//  新增：雷达->外部终端(哨兵/飞镖) 交互数据包
 struct __attribute__((packed)) radar_to_sentry_packet_t {
     interaction_header_t header;
     sentry_tactical_data_t body;

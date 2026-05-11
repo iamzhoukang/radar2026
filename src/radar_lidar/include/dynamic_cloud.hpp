@@ -7,8 +7,9 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/kdtree/kdtree_flann.h>
+#include <vector>
 
-// 【新增】TF2 坐标变换监听相关头文件
+// TF2 坐标变换监听
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
@@ -29,14 +30,16 @@ private:
     pcl::PointCloud<pcl::PointXYZ>::Ptr static_map_;
     pcl::KdTreeFLANN<pcl::PointXYZ>::Ptr kdtree_map_;
     
-    // 动态提取阈值 (点离静态地图多远才算动态点)
     double distance_threshold_;
 
-    // 【新增】TF 监听器对象，用于处理实验室或实战中的坐标对齐
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
+    // 【性能优化】滑动窗口多帧累加，防止单帧提取的动态点过少断锁
+    std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> accumulated_clouds_;
+    size_t accumulate_frames_ = 3; 
 };
 
 } // namespace radar_lidar
 
-#endif
+#endif // RADAR_LIDAR__DYNAMIC_CLOUD_HPP_

@@ -1,22 +1,19 @@
-// src/radar_lidar/src/cluster.cpp
 #include "cluster.hpp"
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/common/centroid.h>
 #include <pcl/search/kdtree.h>
-
-// 【修复】添加 Eigen 头文件
+#include <pcl/filters/voxel_grid.h> // 【性能优化】体素滤波
 #include <Eigen/Core>
 
 namespace radar_lidar {
 
 ClusterNode::ClusterNode(const rclcpp::NodeOptions & options)
 : Node("cluster_node", options) {
-    // 1. 加载参数
+    // 加载参数
     cluster_tolerance_ = this->declare_parameter("cluster_tolerance", 0.6); 
-    min_cluster_size_ = this->declare_parameter("min_cluster_size", 15);   
     max_cluster_size_ = this->declare_parameter("max_cluster_size", 2000); 
+    min_cluster_size_ = this->declare_parameter("min_cluster_size", 15);
     
-    // 防空参数
     drone_min_size_ = this->declare_parameter("drone_min_size", 5);       
     drone_min_height_ = this->declare_parameter("drone_min_height", 1.2); 
 
@@ -26,7 +23,7 @@ ClusterNode::ClusterNode(const rclcpp::NodeOptions & options)
     pub_results_ = this->create_publisher<radar_interfaces::msg::LidarClusterResults>(
         "/radar/lidar_clusters", 10);
 
-    RCLCPP_INFO(this->get_logger(), "雷达聚类算法已解封，防空高度: %.1fm", drone_min_height_);
+    RCLCPP_INFO(this->get_logger(), "【点云聚类】引擎启动，防空甄别高度: %.1fm", drone_min_height_);
 }
 
 void ClusterNode::dynamicCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
@@ -35,18 +32,25 @@ void ClusterNode::dynamicCloudCallback(const sensor_msgs::msg::PointCloud2::Shar
 
     if (cloud->empty()) return;
 
+    // 【性能优化】：聚类前必须降采样，防止多点造成 KD-Tree 搜索崩溃
+    pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+    pcl::VoxelGrid<pcl::PointXYZ> vg;
+    vg.setInputCloud(cloud);
+    vg.setLeafSize(0.1f, 0.1f, 0.1f);
+    vg.filter(*downsampled_cloud);
+
+    if (downsampled_cloud->empty()) return;
+
     pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
-    tree->setInputCloud(cloud);
+    tree->setInputCloud(downsampled_cloud);
 
     std::vector<pcl::PointIndices> cluster_indices;
     pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
     ec.setClusterTolerance(cluster_tolerance_); 
-    
-    // 底层放行到无人机的最小点数，防止无人机被 PCL 预过滤掉
-    ec.setMinClusterSize(drone_min_size_); 
+    ec.setMinClusterSize(drone_min_size_); // 底层放行最小的无人机点数
     ec.setMaxClusterSize(max_cluster_size_);
     ec.setSearchMethod(tree);
-    ec.setInputCloud(cloud);
+    ec.setInputCloud(downsampled_cloud);
     ec.extract(cluster_indices);
 
     radar_interfaces::msg::LidarClusterResults results_msg;
@@ -54,19 +58,14 @@ void ClusterNode::dynamicCloudCallback(const sensor_msgs::msg::PointCloud2::Shar
 
     int current_id = 0;
     for (const auto& indices : cluster_indices) {
-        // 计算几何中心 (Centroid)
         Eigen::Vector4f centroid;
-        pcl::compute3DCentroid(*cloud, indices, centroid);
+        pcl::compute3DCentroid(*downsampled_cloud, indices, centroid);
         
-        float z_height = centroid[2]; // 假设你的雷达系 Z 是高度轴
+        float z_height = centroid[2];
         int pts_count = indices.indices.size();
 
-        // ==========================================
         // 核心逻辑：身份二次审查
-        // ==========================================
-        // 情况 A：在地上，必须点数多才是机器人
         bool is_valid_ground = (z_height < drone_min_height_ && pts_count >= min_cluster_size_);
-        // 情况 B：在天上，点数少一点也认为是无人机候选
         bool is_valid_drone  = (z_height >= drone_min_height_ && pts_count >= drone_min_size_);
 
         if (!is_valid_ground && !is_valid_drone) continue; 

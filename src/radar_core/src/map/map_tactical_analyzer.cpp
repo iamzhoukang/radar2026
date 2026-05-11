@@ -29,14 +29,19 @@ void MapTacticalAnalyzer::evaluate(const std::vector<TrackedTarget>& targets, bo
         float dist_from_my_base = (my_team == 'R') ? dist_from_red_base : dist_from_blue_base;
 
         // ==========================================
-        // 战术 1：对方工程是否上资源岛
-        // 目标：敌方，ID = 1 (工程 2 号)
+        // 战术 1 我方工程是否上资源岛
+        // 目标：我方，ID = 1 (工程 2 号)
         // ==========================================
-        if (target.team == enemy_team && target.target_idx == 1) {
+        if (target.team == my_team && target.target_idx == 1) {
             // 逻辑：敌方工程距离他们老家的距离在 10~14 米之间，并且 Y 在 6~9 之间
-            if (dist_from_enemy_base >= 10.0f && dist_from_enemy_base <= 14.0f &&
+            if (dist_from_enemy_base >= 10.0f && dist_from_enemy_base <= 12.0f &&
                 target.y >= 6.0f && target.y <= 9.0f) {
                 engineer_on_island_ = 1;
+            }else if(dist_from_enemy_base >= 12.0f && dist_from_enemy_base <= 14.0f &&
+            target.y >= 6.0f && target.y <= 9.0f){
+                engineer_on_island_ = 2;
+            }else{
+                engineer_on_island_ = 0;
             }
         }
 
@@ -46,8 +51,8 @@ void MapTacticalAnalyzer::evaluate(const std::vector<TrackedTarget>& targets, bo
         // ==========================================
         if (target.team == enemy_team && 
            (target.target_idx == 0 || target.target_idx == 2 || target.target_idx == 3)) {
-            // 逻辑：敌方战斗车辆距离他们老家的推进深度 > 10 米
-            if (dist_from_enemy_base > 10.0f) {
+            // 逻辑：敌方战斗车辆距离他们老家的推进深度 > 18 米
+            if (dist_from_enemy_base > 18.0f) {
                 enemy_attack_count++;
             }
         }

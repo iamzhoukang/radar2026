@@ -21,7 +21,7 @@ class SerialNode : public rclcpp::Node
 public:
     SerialNode() : Node("serial_node")
     {
-        this->declare_parameter("port_name", "/dev/ttyUSB0");
+        this->declare_parameter("port_name", "/dev/ttyACM1");
         this->declare_parameter("is_blue_team", true);
 
         std::string port = this->get_parameter("port_name").as_string();
@@ -66,10 +66,10 @@ public:
             });
 
         // 3. 定时器：以 5Hz (200ms) 频率发送坐标包 (0x0305)
-        report_timer_ = this->create_wall_timer(200ms, std::bind(&SerialNode::onTimerReport, this));
+        report_timer_ = this->create_wall_timer(250ms, std::bind(&SerialNode::onTimerReport, this));
 
-        // 4. 定时器：以 2Hz (500ms) 频率发送战术包 (0x0301)
-        tactical_timer_ = this->create_wall_timer(500ms, std::bind(&SerialNode::onTimerTactical, this));
+        // 4. 定时器：以 4Hz (275ms) 频率触发，奇偶分频给哨兵/飞镖各约 2Hz
+        tactical_timer_ = this->create_wall_timer(275ms, std::bind(&SerialNode::onTimerTactical, this));
     }
 
 private:
@@ -96,6 +96,9 @@ private:
     // 触发逻辑相关变量
     uint8_t trigger_seq_ = 0;
     std::chrono::steady_clock::time_point last_trigger_time_ = std::chrono::steady_clock::now();
+
+    // 战术分频计数器 (奇偶分发：0->哨兵, 1->飞镖)
+    uint8_t tactical_seq_ = 0;
 
     // =========================================================
     // 任务 A：严格 5Hz 发送 0x0305 小地图坐标
@@ -169,13 +172,14 @@ private:
             packet.body.ally_massive_attack  = latest_tactical_msg_.ally_massive_attack;
         }
 
-        // 3. 第一发：发送给【哨兵】
-        packet.header.receiver_id = target_sentry_id_;         // 7 或 107
-        driver_->sendPacket(CMD_ID_INTERACTION, reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
-
-        // 4. 第二发：修改接收者ID，发送给【飞镖】
-        packet.header.receiver_id = target_dart_id_;           // 8 或 108
-        driver_->sendPacket(CMD_ID_INTERACTION, reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
+        // 3. 【间隔分频】奇偶分发：0->哨兵, 1->飞镖，两者相隔 275ms
+        if ((tactical_seq_++ % 2) == 0) {
+            packet.header.receiver_id = target_sentry_id_;         // 7 或 107
+            driver_->sendPacket(CMD_ID_INTERACTION, reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
+        } else {
+            packet.header.receiver_id = target_dart_id_;           // 8 或 108
+            driver_->sendPacket(CMD_ID_INTERACTION, reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
+        }
 
         // //打印终端日志方便调试
         // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, 

@@ -256,6 +256,11 @@ private:
         tactical_msg.ally_massive_attack = tactical_analyzer_->get_ally_massive_attack();
         pub_tactical_->publish(tactical_msg);
 
+        // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        //     "[战术评估] 前哨:%d 工上岛:%d 敌大攻:%d 我大攻:%d",
+        //     tactical_msg.outpost_alive, tactical_msg.engineer_on_island,
+        //     tactical_msg.enemy_massive_attack, tactical_msg.ally_massive_attack);
+
         // 发布裁判系统串口数据与地图图像
         pub_official_->publish(official_msg);
         

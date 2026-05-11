@@ -1,4 +1,3 @@
-// include/radar_lidar/cluster.hpp
 #ifndef RADAR_LIDAR__CLUSTER_HPP_
 #define RADAR_LIDAR__CLUSTER_HPP_
 
@@ -23,16 +22,16 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_dynamic_;
     rclcpp::Publisher<radar_interfaces::msg::LidarClusterResults>::SharedPtr pub_results_;
 
-    // 聚类参数
+    // 聚类与过滤参数
     float cluster_tolerance_; // 聚类距离阈值
-    int min_cluster_size_;    // 地面机器人最少点数 (如 15)
+    int min_cluster_size_;    // 地面机器人最少点数
     int max_cluster_size_;    // 簇最多点数
 
-    // 【新增】防空专用参数
-    int drone_min_size_;      // 无人机最少点数 (如 5-8)
-    double drone_min_height_; // 判定为“空中目标”的高度阈值 (如 1.2m)
+    // 防空专用参数
+    int drone_min_size_;      // 无人机最少点数 (点数要求可放宽)
+    double drone_min_height_; // 判定为“空中目标”的最低高度阈值
 };
 
 } // namespace radar_lidar
 
-#endif
+#endif // RADAR_LIDAR__CLUSTER_HPP_

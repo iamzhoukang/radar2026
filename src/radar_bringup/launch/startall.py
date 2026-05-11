@@ -23,6 +23,10 @@ def generate_launch_description():
         'lab_mode', default_value='false', description='开启实验室模式(跳过雷达建图对齐)'
     )
     lab_mode = LaunchConfiguration('lab_mode')
+    enable_record_arg = DeclareLaunchArgument(
+        'enable_recording', default_value='false', description='是否开启相机原画质内录'
+    )
+    enable_recording = LaunchConfiguration('enable_recording')
 
     # ==========================================
     # 1. 主视觉管线节点 (主相机/普通装甲板识别)
@@ -32,7 +36,7 @@ def generate_launch_description():
         package='radar_core',
         plugin='radar_core::VideoComponent',
         name='video_test',
-        parameters=[{'video_path': '/home/lzhros/Code/RadarStation/video/output.mp4'}],
+        parameters=[{'video_path': '/home/lzhros/Code/RadarStation/video/hdlg.mp4'}],
         extra_arguments=[{'use_intra_process_comms': True}],
         remappings=[('video_topic', 'cs200_topic')] 
     )
@@ -42,6 +46,10 @@ def generate_launch_description():
         package='radar_core',
         plugin='radar_core::CameraOneComponent',
         name='camera_one',
+        parameters=[{
+            'enable_recording': enable_recording, # <--- 传入内录开关参数
+            'record_path': '/home/lzhros/Code/RadarStation/recording/'
+        }],
         extra_arguments=[{'use_intra_process_comms': True}],
         remappings=[('camera_original_topic_name', 'cs200_topic')] 
     )
@@ -74,6 +82,7 @@ def generate_launch_description():
             'map_yaml': '/home/lzhros/Code/RadarStation/config/map/field_image.yaml',
             'map_image': '/home/lzhros/Code/RadarStation/config/map/field_image_2026.png',
             'mesh_path': '/home/lzhros/Code/RadarStation/config/map/RB2026_rmuc.ply',
+            'handeye_yaml': '/home/lzhros/Code/RadarStation/config/camera/cs200_handeye.yaml',
             'is_blue_team': is_blue_team  
         }],
         extra_arguments=[{'use_intra_process_comms': True}]
@@ -133,7 +142,7 @@ def generate_launch_description():
         executable='serial_node',
         name='serial_node',
         output='screen',
-        parameters=[{'port_name': '/tmp/ttyUSB_RADAR', 'is_blue_team': is_blue_team}]
+        parameters=[{'port_name': '/dev/ttyACM0', 'is_blue_team': is_blue_team}]
     )
 
     # ==========================================
@@ -161,7 +170,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        use_video_arg, is_blue_team_arg, lab_mode_arg,
+        use_video_arg, is_blue_team_arg, lab_mode_arg, enable_record_arg, # <--- 注册新增的参数
         vision_container, lidar_container,
         visualizer_standalone_node, serial_standalone_node  
     ])

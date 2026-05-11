@@ -5,7 +5,13 @@
 #include <thread>
 #include <atomic>
 #include <memory>
-//哈基旭师兄开发的海康sdk
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <iomanip>
+#include <sstream>
+
+// 哈基旭师兄开发的海康sdk
 #include "rb26SDK/include/CamreaExmple.hpp"
 
 namespace radar_core
@@ -13,78 +19,158 @@ namespace radar_core
 
 class CameraOneComponent : public rclcpp::Node
 {
-    private:
-        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_;
-        sdk::CameraExmple<sdk::HikCamera> cap_;
+private:
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_;
+    sdk::CameraExmple<sdk::HikCamera> cap_;
 
-        //多线程控制变量
-        std::thread capture_thread_;
-        std::atomic<bool> is_running_;
+    std::thread capture_thread_;
+    std::thread record_thread_;
+    std::atomic<bool> is_running_;
 
-        void captureLoop()
-        {   
-            //只要 ROS 正常运行且标志位为 true，就持续死循环取流
-            while(rclcpp::ok() && is_running_)
-            {   
-                cv::Mat frame = cap_.getFrame(0,0);
-                if(frame.empty()) {
-                // 如果没取到，短暂休眠让出 CPU 时间片，防止死锁空转
+    // 录制相关缓冲池与锁
+    std::queue<cv::Mat> record_queue_;
+    std::mutex queue_mutex_;
+    std::condition_variable queue_cv_;
+    cv::VideoWriter writer_;
+    const size_t MAX_QUEUE_SIZE = 60; // 防止内存撑爆的队列上限
+    
+    
+    bool enable_recording_ = false;
+
+    void recordLoop()
+    {
+        while (is_running_ || !record_queue_.empty()) {
+            cv::Mat frame_to_write;
+            {
+                std::unique_lock<std::mutex> lock(queue_mutex_);
+                queue_cv_.wait(lock, [this] { 
+                    return !record_queue_.empty() || !is_running_; 
+                });
+
+                if (record_queue_.empty() && !is_running_) break;
+
+                frame_to_write = std::move(record_queue_.front());
+                record_queue_.pop();
+            }
+
+            if (!frame_to_write.empty() && writer_.isOpened()) {
+                writer_.write(frame_to_write);
+            }
+        }
+        if(writer_.isOpened()) writer_.release();
+        RCLCPP_INFO(this->get_logger(), "录制已停止，文件已安全关闭。");
+    }
+
+    
+    void captureLoop()
+    {
+        while (rclcpp::ok() && is_running_) {
+            cv::Mat frame = cap_.getFrame(0, 0);
+            if (frame.empty()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 continue;
+            }
+
+            // 1. 如果开启了内录，才进行深拷贝并压入队列
+            if (enable_recording_) {
+                std::lock_guard<std::mutex> lock(queue_mutex_);
+                if (record_queue_.size() < MAX_QUEUE_SIZE) {
+                    record_queue_.push(frame.clone()); // 必须 clone
                 }
-
-                // 【零拷贝构造】
-                //  在堆内存中开辟一块干净的 Image 消息空间，由 unique_ptr 独占管理
-                auto msg = std::make_unique<sensor_msgs::msg::Image>();
-
-                //填充消息头
-                msg->header.stamp = this->now();
-                msg->header.frame_id = "cs200_frame";
-
-                //将 cv::Mat 的数据高效拷贝到 msg 中
-                // 注意：这里重载的 toImageMsg 传入的是对象的引用 (*msg)，避免了创建额外的 shared_ptr
-                cv_bridge::CvImage(msg->header, "bgr8", frame).toImageMsg(*msg);
-
-                // 使用 std::move 转移所有权给 ROS2 底层
-                // 发布完成后，当前的 msg 指针将变为空指针 (nullptr)
-                pub_->publish(std::move(msg));
+                queue_cv_.notify_one();
             }
-        }
 
-    public:
-        //组件化构造函数必须接受 rclcpp::NodeOptions
-        explicit CameraOneComponent(const rclcpp::NodeOptions & options)
-        :Node("camera_one_node", options),is_running_(false)
-        {
-            //初始化相机
-            sdk::CameraExmple<sdk::HikCamera>::CameraSDKInit();
-            const char* sn = "DA7831910";
-            if(!cap_.CameraInit(const_cast<char *>(sn), true, 5000, 0.7, 0.3)) {
-            RCLCPP_ERROR(this->get_logger(), "相机一初始化失败！");
+            // 2. 发布 ROS 消息
+            auto msg = std::make_unique<sensor_msgs::msg::Image>();
+            msg->header.stamp = this->now();
+            msg->header.frame_id = "cs200_frame";
+            cv_bridge::CvImage(msg->header, "bgr8", frame).toImageMsg(*msg);
+            pub_->publish(std::move(msg));
+        }
+    }
+
+    // 获取当前时间字符串用于命名
+    std::string getCurrentTimeString() {
+        auto now = std::chrono::system_clock::now();
+        auto in_time_t = std::chrono::system_clock::to_time_t(now);
+        std::stringstream ss;
+        ss << std::put_time(std::localtime(&in_time_t), "%Y%m%d_%H%M%S");
+        return ss.str();
+    }
+
+public:
+    explicit CameraOneComponent(const rclcpp::NodeOptions &options)
+        : Node("camera_one_node", options), is_running_(false)
+    {
+        // 1. 声明并获取参数：录制开关和存放路径
+        this->declare_parameter<bool>("enable_recording", false); // 默认关闭
+        this->declare_parameter<std::string>("record_path", "/home/lzhros/Code/RadarStation/recording/");
+        
+        enable_recording_ = this->get_parameter("enable_recording").as_bool();
+        std::string base_path = this->get_parameter("record_path").as_string();
+
+        // 2. 初始化海康相机
+        sdk::CameraExmple<sdk::HikCamera>::CameraSDKInit();
+        const char *sn = "DA7831910";
+        if (!cap_.CameraInit(const_cast<char *>(sn), true, 10000, 0.7, 0.3)) {
+            RCLCPP_ERROR(this->get_logger(), "相机一初始化失败！请检查连接或是否被占用。");
             return;
-            }
-
-            //创建发布者
-            pub_ = this->create_publisher<sensor_msgs::msg::Image>("cs200_topic",10);
-
-            //启动取流线程
-            is_running_ = true;
-            capture_thread_ = std::thread(&CameraOneComponent::captureLoop, this);
-            RCLCPP_INFO(this->get_logger(), "相机一采集子线程已启动，等待图像...");
         }
 
-    ~CameraOneComponent() 
+        // 3. 根据开关决定是否初始化录制
+        if (enable_recording_) {
+            if (!base_path.empty() && base_path.back() != '/') {
+                base_path += "/";
+            }
+            std::string full_file_path = base_path + "cam1_" + getCurrentTimeString() + ".mp4";
+
+            int frame_width = 5472;
+            int frame_height = 3648;
+            
+            std::string pipeline = "appsrc ! videoconvert ! video/x-raw, format=I420 ! "
+                                   "x264enc bitrate=15000 speed-preset=ultrafast tune=zerolatency ! "
+                                   "h264parse ! mp4mux ! filesink location=" + full_file_path;
+
+            writer_.open(pipeline, cv::CAP_GSTREAMER, 0, 30.0, cv::Size(frame_width, frame_height));
+            
+            if (!writer_.isOpened()) {
+                RCLCPP_WARN(this->get_logger(), "GStreamer 开启失败，自动降级为原生 MP4 录制...");
+                writer_.open(full_file_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 30.0, cv::Size(frame_width, frame_height));
+            }
+
+            if (writer_.isOpened()) {
+                RCLCPP_INFO(this->get_logger(), "内录已开启，原画质视频保存至: %s", full_file_path.c_str());
+                // 仅在成功开启时才启动录制子线程
+                record_thread_ = std::thread(&CameraOneComponent::recordLoop, this);
+            } else {
+                RCLCPP_ERROR(this->get_logger(), "所有录制管道均开启失败！关闭本次内录功能。");
+                enable_recording_ = false; // 防止后续继续 push 进队列
+            }
+        } else {
+            RCLCPP_INFO(this->get_logger(), "内录功能已禁用 (参数 enable_recording=false)。");
+        }
+
+        // 4. 初始化发布者与主采集线程
+        pub_ = this->create_publisher<sensor_msgs::msg::Image>("cs200_topic", 10);
+
+        is_running_ = true;
+        capture_thread_ = std::thread(&CameraOneComponent::captureLoop, this);
+    }
+
+    ~CameraOneComponent()
     {
         is_running_ = false;
-        if(capture_thread_.joinable()) {
-            capture_thread_.join();
+        
+        if (enable_recording_) {
+            queue_cv_.notify_all(); // 唤醒录制线程把剩下的帧写完
+            if (record_thread_.joinable()) record_thread_.join();
         }
-        RCLCPP_INFO(this->get_logger(), "相机采集子线程已安全关闭。");
+        
+        if (capture_thread_.joinable()) capture_thread_.join();
     }
 };
 
-}//namespace radar_core
+} // namespace radar_core
 
-//注册组件宏，这是 Launch 文件能找到它的唯一凭证
 #include "rclcpp_components/register_node_macro.hpp"
 RCLCPP_COMPONENTS_REGISTER_NODE(radar_core::CameraOneComponent)

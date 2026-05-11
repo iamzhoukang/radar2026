@@ -68,8 +68,8 @@ void TrackingState::init(int cid, const std::string& n) {
     pos_2d_uwb_det = cv::Point2f(0, 0);
     guess_point = cv::Point2f(0, 0);  // 【新增】
     is_start_guess = false;            // 【新增】
-    kalman_box = KalmanFilterBox(0.1f, 2.0f, 1.0f);
-    kalman_2d = KalmanFilter2d(2.0f, 1.0f, 0.1f);
+    kalman_box = KalmanFilterBox(0.1f, 5.0f, 0.5f);
+    kalman_2d = KalmanFilter2d(10.0f, 0.3f, 0.1f);
 }
 
 CascadeMatchTracker::CascadeMatchTracker(
@@ -284,7 +284,7 @@ void CascadeMatchTracker::track(const std::vector<SingleDetectionResult>& detect
                         track.pos_2d_uwb.x - det_pos2d[0], 
                         track.pos_2d_uwb.y - det_pos2d[1]
                     );
-                    if (d < 1.5f) {
+                    if (d < 4.0f) {
                         track.kalman_2d.update(det_pos2d);
                     }
                 }

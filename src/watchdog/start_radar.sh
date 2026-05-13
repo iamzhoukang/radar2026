@@ -19,7 +19,7 @@ fi
 # 1. 联合安全退出机制 (Ctrl+C 拦截)
 # ==========================================
 cleanup() {
-    echo -e "\n[Watchdog] 收到退出信号，正在安全清理所有进程..."
+    echo -e "\n[Watchdog] 收到退出信号，正在安全清理背景进程..."
     
     # 杀掉自瞄进程
     if [ -n "$AIM_PID" ]; then
@@ -33,8 +33,9 @@ cleanup() {
         kill -9 $LIVOX_PID 2>/dev/null
     fi
     
-    echo "[Watchdog] 清理完毕，安全退出。"
-    exit 0
+    echo "[Watchdog] 正在等待核心管线保存视频并安全退出，请稍候..."
+    # 【核心修改】：删掉了这里的 exit 0。
+    # 让系统自然等待前台的 ros2 launch 进程执行完析构函数（包含保存视频的步骤）后再退出。
 }
 # 捕获 Ctrl+C (SIGINT) 和 kill 信号 (SIGTERM)
 trap cleanup SIGINT SIGTERM
@@ -68,3 +69,6 @@ sleep 2
 # ==========================================
 echo "[Watchdog] 启动核心管线 (use_video: $MODE)..."
 ros2 launch radar_bringup startall.py use_video:=$MODE
+
+# 当上面的 ros2 launch 彻底结束（视频也保存完了）后，脚本才会走到这里并自然结束
+echo "[Watchdog] 所有节点已安全关闭，脚本退出。"

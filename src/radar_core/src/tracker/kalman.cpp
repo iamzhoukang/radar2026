@@ -140,9 +140,9 @@ std::vector<float> KalmanFilter2d::predict(float dt) {
 }
 
 std::vector<float> KalmanFilter2d::update(const std::vector<float>& pos) {
-    // 【保守策略】防跳变：测量与预测偏差超过 5 米直接重置，以识别为准
+    // 【更信任检测】防跳变阈值从 5.0m 降至 3.0m，大机动时更快跟随检测值
     float jump_dist = std::hypot(x(0) - pos[0], x(1) - pos[1]);
-    if (jump_dist > 5.0f) {
+    if (jump_dist > 3.0f) {
         reset(pos);
         return pos;
     }

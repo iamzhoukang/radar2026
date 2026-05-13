@@ -117,7 +117,7 @@ private:
         solver::PnPResult result = solver_.solve(points);
 
         // 3. 批判性评估解算质量
-        if (!result.success || result.reprojection_error > 30.0) {
+        if (!result.success || result.reprojection_error > 100.0) {
             RCLCPP_ERROR(this->get_logger(), "空间重构失败或物理形变过大 (误差: %.2f px)！请重试。", result.reprojection_error); 
             return; 
         }

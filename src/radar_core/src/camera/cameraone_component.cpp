@@ -34,7 +34,6 @@ private:
     cv::VideoWriter writer_;
     const size_t MAX_QUEUE_SIZE = 60; // 防止内存撑爆的队列上限
     
-    
     bool enable_recording_ = false;
 
     void recordLoop()
@@ -58,10 +57,9 @@ private:
             }
         }
         if(writer_.isOpened()) writer_.release();
-        RCLCPP_INFO(this->get_logger(), "录制已停止，文件已安全关闭。");
+        RCLCPP_INFO(this->get_logger(), "录制已停止，MP4 (H.265) 文件已安全关闭。");
     }
 
-    
     void captureLoop()
     {
         while (rclcpp::ok() && is_running_) {
@@ -102,18 +100,22 @@ public:
     explicit CameraOneComponent(const rclcpp::NodeOptions &options)
         : Node("camera_one_node", options), is_running_(false)
     {
-        // 1. 声明并获取参数：录制开关和存放路径
-        this->declare_parameter<bool>("enable_recording", false); // 默认关闭
+        // 1. 声明并获取参数
+        this->declare_parameter<bool>("enable_recording", false); 
         this->declare_parameter<std::string>("record_path", "/home/lzhros/Code/RadarStation/recording/");
         
         enable_recording_ = this->get_parameter("enable_recording").as_bool();
         std::string base_path = this->get_parameter("record_path").as_string();
+
+        // 提前将 is_running_ 设为 true，防止录制线程因为 false 直接退出
+        is_running_ = true; 
 
         // 2. 初始化海康相机
         sdk::CameraExmple<sdk::HikCamera>::CameraSDKInit();
         const char *sn = "DA7831910";
         if (!cap_.CameraInit(const_cast<char *>(sn), true, 10000, 0.7, 0.3)) {
             RCLCPP_ERROR(this->get_logger(), "相机一初始化失败！请检查连接或是否被占用。");
+            is_running_ = false; // 初始化失败，重置状态
             return;
         }
 
@@ -122,29 +124,30 @@ public:
             if (!base_path.empty() && base_path.back() != '/') {
                 base_path += "/";
             }
+            
             std::string full_file_path = base_path + "cam1_" + getCurrentTimeString() + ".mp4";
 
             int frame_width = 5472;
             int frame_height = 3648;
             
+            // 【核心修复】：升级为 H.265 (nvh265enc) 编码器，完美吞吐 5.4K 超高分辨率
             std::string pipeline = "appsrc ! videoconvert ! video/x-raw, format=I420 ! "
-                                   "x264enc bitrate=15000 speed-preset=ultrafast tune=zerolatency ! "
-                                   "h264parse ! mp4mux ! filesink location=" + full_file_path;
+                                   "nvh265enc bitrate=80000 preset=default rc-mode=cbr ! "
+                                   "h265parse ! mp4mux ! filesink location=" + full_file_path;
 
-            writer_.open(pipeline, cv::CAP_GSTREAMER, 0, 30.0, cv::Size(frame_width, frame_height));
+            writer_.open(pipeline, cv::CAP_GSTREAMER, 0, 20.0, cv::Size(frame_width, frame_height));
             
             if (!writer_.isOpened()) {
-                RCLCPP_WARN(this->get_logger(), "GStreamer 开启失败，自动降级为原生 MP4 录制...");
-                writer_.open(full_file_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 30.0, cv::Size(frame_width, frame_height));
+                RCLCPP_WARN(this->get_logger(), "GStreamer H.265 硬编开启失败，降级为原生 MP4 软编录制...");
+                writer_.open(full_file_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), 20.0, cv::Size(frame_width, frame_height));
             }
 
             if (writer_.isOpened()) {
-                RCLCPP_INFO(this->get_logger(), "内录已开启，原画质视频保存至: %s", full_file_path.c_str());
-                // 仅在成功开启时才启动录制子线程
+                RCLCPP_INFO(this->get_logger(), "内录已开启，5.4K 原画质 H.265 视频保存至: %s", full_file_path.c_str());
                 record_thread_ = std::thread(&CameraOneComponent::recordLoop, this);
             } else {
                 RCLCPP_ERROR(this->get_logger(), "所有录制管道均开启失败！关闭本次内录功能。");
-                enable_recording_ = false; // 防止后续继续 push 进队列
+                enable_recording_ = false; 
             }
         } else {
             RCLCPP_INFO(this->get_logger(), "内录功能已禁用 (参数 enable_recording=false)。");
@@ -152,8 +155,6 @@ public:
 
         // 4. 初始化发布者与主采集线程
         pub_ = this->create_publisher<sensor_msgs::msg::Image>("cs200_topic", 10);
-
-        is_running_ = true;
         capture_thread_ = std::thread(&CameraOneComponent::captureLoop, this);
     }
 

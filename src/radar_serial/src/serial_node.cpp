@@ -3,6 +3,7 @@
 #include <memory>
 #include <cstring>
 #include <mutex> 
+// [已移除] 不需要随机密钥生成
 
 // 引用跨包的消息接口 (这个命名空间一般是全局固定的，无需更改)
 #include "radar_interfaces/msg/radar_map.hpp"
@@ -21,7 +22,7 @@ class SerialNode : public rclcpp::Node
 public:
     SerialNode() : Node("serial_node")
     {
-        this->declare_parameter("port_name", "/dev/ttyACM1");
+        this->declare_parameter("port_name", "/dev/ttyACM0");
         this->declare_parameter("is_blue_team", true);
 
         std::string port = this->get_parameter("port_name").as_string();
@@ -94,7 +95,7 @@ private:
     bool has_tactical_data_ = false; 
 
     // 触发逻辑相关变量
-    uint8_t trigger_seq_ = 0;
+    uint16_t trigger_seq_ = 0;
     std::chrono::steady_clock::time_point last_trigger_time_ = std::chrono::steady_clock::now();
 
     // 战术分频计数器 (奇偶分发：0->哨兵, 1->飞镖)
@@ -180,12 +181,6 @@ private:
             packet.header.receiver_id = target_dart_id_;           // 8 或 108
             driver_->sendPacket(CMD_ID_INTERACTION, reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
         }
-
-        // //打印终端日志方便调试
-        // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, 
-        //     "[战术下发] -> 哨兵&飞镖 | 前哨:%d 工上岛:%d 敌大攻:%d 我大攻:%d",
-        //     packet.body.outpost_alive, packet.body.engineer_on_island, 
-        //     packet.body.enemy_massive_attack, packet.body.ally_massive_attack);
     }
 
     // =========================================================
@@ -203,23 +198,39 @@ private:
                 auto now = std::chrono::steady_clock::now();
                 auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - last_trigger_time_).count();
                 if (duration >= 2) { 
-                    RCLCPP_WARN(this->get_logger(), "⚡️ 执行自动触发！向 0x8080 发送 0x0121 ⚡️");
-                    sendTriggerCmd();
+                    sendTriggerCmd(); // [修改] 调用更新后的发送函数
                     last_trigger_time_ = now;
                 }
             }
         }
     }
 
+    // =========================================================
+    // [修改] 完善后的 0x0121 双倍易伤与密钥发送
+    // =========================================================
     void sendTriggerCmd()
     {
         radar_double_damage_packet_t packet;
         std::memset(&packet, 0, sizeof(packet)); 
+        
+        // 1. 封装交互数据帧头 (0x0301)
         packet.header.data_cmd_id = SUBCMD_ID_RADAR_DECISION;
         packet.header.sender_id = my_robot_id_;
         packet.header.receiver_id = SERVER_ID;
-        packet.body.confirm_trigger = ++trigger_seq_; 
+        
+        // 2. 封装双倍易伤触发指令 (按次递增)
+        packet.body.confirm_trigger = static_cast<uint8_t>(++trigger_seq_); 
+        
+            // 3. 不携带密钥验证，仅触发双倍易伤
+        packet.body.password_cmd = 0;
+        std::memset(packet.body.password, 0, 6);
+
+        // 4. 通过串口发送包
         driver_->sendPacket(CMD_ID_INTERACTION, reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
+        
+        // 5. 打印终端日志以便调试确认
+        RCLCPP_INFO(this->get_logger(), "⚡️ 发送 0x0121 | 易伤序列: %d ⚡️", 
+                    packet.body.confirm_trigger);
     }
 };
 

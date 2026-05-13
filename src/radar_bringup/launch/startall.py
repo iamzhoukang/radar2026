@@ -15,7 +15,7 @@ def generate_launch_description():
     use_video = LaunchConfiguration('use_video')
 
     is_blue_team_arg = DeclareLaunchArgument(
-        'is_blue_team', default_value='true', description='雷达站所属阵营'
+        'is_blue_team', default_value='false', description='雷达站所属阵营'
     )
     is_blue_team = LaunchConfiguration('is_blue_team')
 
@@ -24,7 +24,7 @@ def generate_launch_description():
     )
     lab_mode = LaunchConfiguration('lab_mode')
     enable_record_arg = DeclareLaunchArgument(
-        'enable_recording', default_value='false', description='是否开启相机原画质内录'
+        'enable_recording', default_value='true', description='是否开启相机原画质内录'
     )
     enable_recording = LaunchConfiguration('enable_recording')
 
@@ -47,7 +47,7 @@ def generate_launch_description():
         plugin='radar_core::CameraOneComponent',
         name='camera_one',
         parameters=[{
-            'enable_recording': enable_recording, # <--- 传入内录开关参数
+            'enable_recording': enable_recording,
             'record_path': '/home/lzhros/Code/RadarStation/recording/'
         }],
         extra_arguments=[{'use_intra_process_comms': True}],
@@ -68,7 +68,7 @@ def generate_launch_description():
         name='solvepnp_component',
         parameters=[{
             'config_path': '/home/lzhros/Code/RadarStation/config/solver/cs200_calibration.yaml',
-            'keypoint_path': '/home/lzhros/Code/RadarStation/config/solver/keypoint_6.txt'
+            'keypoint_path': '/home/lzhros/Code/RadarStation/config/solver/keypoint_6_2026.txt'
         }],
         extra_arguments=[{'use_intra_process_comms': True}]
     )

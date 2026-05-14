@@ -30,7 +30,7 @@ classifier_labels:
   8: R4
   9: R7
 outpost_roi:
-  - 1915
-  - 1423
-  - 273
+  - 2034
+  - 876
+  - 265
   - 188

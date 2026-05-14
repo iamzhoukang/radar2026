@@ -15,7 +15,7 @@ def generate_launch_description():
     use_video = LaunchConfiguration('use_video')
 
     is_blue_team_arg = DeclareLaunchArgument(
-        'is_blue_team', default_value='false', description='雷达站所属阵营'
+        'is_blue_team', default_value='true', description='雷达站所属阵营'
     )
     is_blue_team = LaunchConfiguration('is_blue_team')
 
@@ -36,7 +36,7 @@ def generate_launch_description():
         package='radar_core',
         plugin='radar_core::VideoComponent',
         name='video_test',
-        parameters=[{'video_path': '/home/lzhros/Code/RadarStation/video/hdlg.mp4'}],
+        parameters=[{'video_path': '/home/lzhros/Code/RadarStation/video/output.mp4'}],
         extra_arguments=[{'use_intra_process_comms': True}],
         remappings=[('video_topic', 'cs200_topic')] 
     )

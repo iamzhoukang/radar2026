@@ -219,10 +219,10 @@ private:
             auto elapsed_sec = std::chrono::duration<double>(end_time - last_time_).count();
             double avg_fps = 30.0 / elapsed_sec;
             double avg_latency = total_latency_ms_ / 30.0;
-            RCLCPP_INFO(this->get_logger(), 
-                "[Vision] %.1f FPS | 推理延迟: %.1f ms | 目标: %zu | 前哨站: %s", 
-                avg_fps, avg_latency, objects.size(), 
-                outpost_alive_status ? "存活" : "摧毁");
+            // RCLCPP_INFO(this->get_logger(), 
+            //     "[Vision] %.1f FPS | 推理延迟: %.1f ms | 目标: %zu | 前哨站: %s", 
+            //     avg_fps, avg_latency, objects.size(), 
+            //     outpost_alive_status ? "存活" : "摧毁");
             
             total_latency_ms_ = 0.0;
             last_time_ = end_time;

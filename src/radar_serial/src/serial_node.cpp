@@ -2,7 +2,8 @@
 #include <chrono>
 #include <memory>
 #include <cstring>
-#include <mutex> 
+#include <mutex>
+#include <random> 
 // [已移除] 不需要随机密钥生成
 
 // 引用跨包的消息接口 (这个命名空间一般是全局固定的，无需更改)
@@ -71,6 +72,9 @@ public:
 
         // 4. 定时器：以 4Hz (275ms) 频率触发，奇偶分频给哨兵/飞镖各约 2Hz
         tactical_timer_ = this->create_wall_timer(275ms, std::bind(&SerialNode::onTimerTactical, this));
+
+        // 5. 定时器：每 10s 发送一次 0x0121 双倍易伤触发指令
+        trigger_timer_ = this->create_wall_timer(10s, std::bind(&SerialNode::sendTriggerCmd, this));
     }
 
 private:
@@ -80,7 +84,8 @@ private:
     rclcpp::Subscription<radar_interfaces::msg::SentryTactical>::SharedPtr sub_tactical_;
     
     rclcpp::TimerBase::SharedPtr report_timer_;
-    rclcpp::TimerBase::SharedPtr tactical_timer_; 
+    rclcpp::TimerBase::SharedPtr tactical_timer_;
+    rclcpp::TimerBase::SharedPtr trigger_timer_; 
     
     bool is_red_side_;
     uint16_t my_robot_id_;
@@ -94,9 +99,11 @@ private:
     bool has_new_data_ = false;
     bool has_tactical_data_ = false; 
 
-    // 触发逻辑相关变量
-    uint16_t trigger_seq_ = 0;
-    std::chrono::steady_clock::time_point last_trigger_time_ = std::chrono::steady_clock::now();
+    // 0x020E 最新双倍易伤机会次数
+    uint8_t latest_chance_ = 0;
+
+    // 随机数引擎（用于生成 6 位密钥）
+    std::mt19937 rng_{std::random_device{}()};
 
     // 战术分频计数器 (奇偶分发：0->哨兵, 1->飞镖)
     uint8_t tactical_seq_ = 0;
@@ -194,43 +201,75 @@ private:
             std::memcpy(&info, data, sizeof(info));
             uint8_t chance = info.get_double_damage_chance();
 
-            if (chance > 0) {
-                auto now = std::chrono::steady_clock::now();
-                auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - last_trigger_time_).count();
-                if (duration >= 2) { 
-                    sendTriggerCmd(); // [修改] 调用更新后的发送函数
-                    last_trigger_time_ = now;
-                }
+            // 打印 0x020E 完整下行数据
+            std::string hex_str;
+            for (uint16_t i = 0; i < len; ++i) {
+                char buf[4];
+                snprintf(buf, sizeof(buf), "%02X ", data[i]);
+                hex_str += buf;
             }
+            // RCLCPP_INFO(this->get_logger(),
+            //     "[0x020E 下行] cmd_id=0x%04X | len=%u | raw=[%s] | radar_info=0x%02X\n"
+            //     "  ├─ 双倍易伤机会: %u (0~2)\n"
+            //     "  ├─ 对方被触发双倍易伤: %s\n"
+            //     "  ├─ 己方加密等级(干扰难度): %u (1~3)\n"
+            //     "  ├─ 可修改密钥: %s\n"
+            //     "  └─ 保留位: %u",
+            //     cmd_id, len, hex_str.c_str(), info.radar_info,
+            //     chance,
+            //     info.is_enemy_under_double_damage() ? "是" : "否",
+            //     info.get_encryption_level(),
+            //     info.can_modify_key() ? "是" : "否",
+            //     info.get_reserved());
+
+            // 记录最新的双倍易伤机会次数，供 0x0121 定时发送时使用
+            latest_chance_ = chance;
         }
     }
 
     // =========================================================
-    // [修改] 完善后的 0x0121 双倍易伤与密钥发送
+    // 0x0121 双倍易伤触发指令发送（每 10s 定时触发）
     // =========================================================
     void sendTriggerCmd()
     {
+        if (!driver_->isOpen()) return;
+
+        // 根据 0x020E 的最新 chance 决定 confirm_trigger
+        // chance 为 0 或 1 → 写死为 1；chance 为 2 → 写死为 2
+        uint8_t confirm_val = (latest_chance_ >= 2) ? 2 : 1;
+
         radar_double_damage_packet_t packet;
-        std::memset(&packet, 0, sizeof(packet)); 
-        
+        std::memset(&packet, 0, sizeof(packet));
+
         // 1. 封装交互数据帧头 (0x0301)
         packet.header.data_cmd_id = SUBCMD_ID_RADAR_DECISION;
         packet.header.sender_id = my_robot_id_;
         packet.header.receiver_id = SERVER_ID;
-        
-        // 2. 封装双倍易伤触发指令 (按次递增)
-        packet.body.confirm_trigger = static_cast<uint8_t>(++trigger_seq_); 
-        
-            // 3. 不携带密钥验证，仅触发双倍易伤
-        packet.body.password_cmd = 0;
-        std::memset(packet.body.password, 0, 6);
 
-        // 4. 通过串口发送包
+        // 2. 封装双倍易伤触发指令
+        packet.body.confirm_trigger = confirm_val;
+
+        // 3. 密钥指令类型 = 2（验证对方密钥）
+        packet.body.password_cmd = 2;
+
+        // 4. 随机生成 6 位密钥（ASCII 字母或数字）
+        std::uniform_int_distribution<> dis(0, 61);
+        const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        for (int i = 0; i < 6; ++i) {
+            packet.body.password[i] = static_cast<uint8_t>(charset[dis(rng_)]);
+        }
+
+        // 5. 通过串口发送包
         driver_->sendPacket(CMD_ID_INTERACTION, reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
-        
-        // 5. 打印终端日志以便调试确认
-        RCLCPP_INFO(this->get_logger(), "⚡️ 发送 0x0121 | 易伤序列: %d ⚡️", 
-                    packet.body.confirm_trigger);
+
+        // 6. 打印完整发送内容
+        std::string pwd_str;
+        for (int i = 0; i < 6; ++i) {
+            pwd_str += static_cast<char>(packet.body.password[i]);
+        }
+        // RCLCPP_INFO(this->get_logger(),
+        //     "[0x0121 发送] confirm_trigger=%u | password_cmd=%u | password=[%s] | raw_chance=%u",
+        //     packet.body.confirm_trigger, packet.body.password_cmd, pwd_str.c_str(), latest_chance_);
     }
 };
 

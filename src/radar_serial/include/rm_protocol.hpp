@@ -56,8 +56,25 @@ struct __attribute__((packed)) map_robot_data_t {
 // =========================================================================
 struct __attribute__((packed)) radar_info_t {
     uint8_t radar_info;
+    // bit 0-1: 雷达拥有触发双倍易伤的机会 (0~2)
     uint8_t get_double_damage_chance() const {
         return (radar_info & 0x03); 
+    }
+    // bit 2: 对方是否正在被触发双倍易伤 (0=未触发, 1=正在触发)
+    bool is_enemy_under_double_damage() const {
+        return ((radar_info >> 2) & 0x01) != 0;
+    }
+    // bit 3-4: 己方加密等级 / 对方干扰波难度 (1~3)
+    uint8_t get_encryption_level() const {
+        return ((radar_info >> 3) & 0x03);
+    }
+    // bit 5: 当前是否可以修改密钥 (1=可修改)
+    bool can_modify_key() const {
+        return ((radar_info >> 5) & 0x01) != 0;
+    }
+    // bit 6-7: 保留位
+    uint8_t get_reserved() const {
+        return ((radar_info >> 6) & 0x03);
     }
 };
 
@@ -76,6 +93,7 @@ struct __attribute__((packed)) interaction_header_t {
     uint16_t receiver_id; 
 };
 
+//0x20E
 struct __attribute__((packed)) radar_decision_t {
     uint8_t confirm_trigger; 
     uint8_t password_cmd;    
